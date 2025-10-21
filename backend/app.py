@@ -40,6 +40,27 @@ def health_check():
         'version': '1.0.0'
     })
 
+@app.route('/test-db', methods=['GET'])
+def test_database():
+    """Test database connection"""
+    try:
+        # Test basic table access
+        result = supabase_handler.client.table('spa_bookings').select('id').limit(1).execute()
+        return jsonify({
+            'status': 'success',
+            'message': 'Supabase connection successful',
+            'database': 'reachable',
+            'tables': 'accessible',
+            'project_id': 'biaewzljhaowgaocxzxq'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': 'Supabase connection failed',
+            'error': str(e),
+            'database': 'unreachable'
+        }), 500
+
 @app.route('/webhook/incoming-call', methods=['POST'])
 def incoming_call():
     """Twilio webhook for incoming calls"""
