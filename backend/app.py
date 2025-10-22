@@ -5,6 +5,9 @@ Handles incoming calls and coordinates between Twilio, OpenAI, and Supabase.
 
 import logging
 import json
+import asyncio
+import websockets
+import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sock import Sock
@@ -180,8 +183,156 @@ def internal_error(error):
 # WebSocket endpoint for Twilio Media Streams
 @sock.route('/media-stream')
 def media_stream(ws):
-    """Handle WebSocket connection from Twilio Media Streams"""
+    """Bridge Twilio Media Stream ↔ OpenAI Realtime API"""
     logger.info("✅ Twilio Media Stream WebSocket connected")
+    
+    stream_sid = None
+    call_sid = None
+    openai_ws = None
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    async def connect_to_openai_with_retry(max_retries=3):
+        """Connect to OpenAI with automatic retry"""
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"🔄 Attempting OpenAI connection (attempt {attempt + 1}/{max_retries})")
+                ws_conn = await websockets.connect(
+                    f"wss://api.openai.com/v1/realtime?model={Config.OPENAI_MODEL}",
+                    extra_headers={
+                        "Authorization": f"Bearer {Config.OPENAI_API_KEY}",
+                        "OpenAI-Beta": "realtime=v1"
+                    }
+                )
+                logger.info("✅ OpenAI connection established")
+                return ws_conn
+            except Exception as e:
+                logger.error(f"❌ OpenAI connection attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)  # Wait before retry
+                else:
+                    raise
+    
+    async def bridge_audio():
+        """Bridge audio between Twilio and OpenAI"""
+        nonlocal openai_ws
+        
+        try:
+            # Connect to OpenAI with retry
+            openai_ws = await connect_to_openai_with_retry()
+            
+            # Send session configuration to OpenAI
+            session_config = {
+                "type": "session.update",
+                "session": {
+                    "modalities": ["text", "audio"],
+                    "input_audio_format": "g711_ulaw",
+                    "output_audio_format": "g711_ulaw",
+                    "voice": "alloy",
+                    "instructions": f"""You are a professional receptionist for {Config.SPA_NAME}, a luxury spa in Italy.
+
+Operating hours: 10:00 AM to 8:00 PM daily
+Session duration: {Config.SESSION_DURATION_HOURS} hours  
+Max capacity: {Config.MAX_CAPACITY_PER_SLOT} people per slot
+
+CONVERSATION FLOW:
+1. Greet in Italian or English
+2. Confirm phone number
+3. Ask for name
+4. Ask for preferred date
+5. Present available slots
+6. Check availability and book
+7. Confirm booking details
+
+Be friendly, patient, and professional. Keep responses concise and natural.""",
+                    "temperature": 0.7,
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 500
+                    }
+                }
+            }
+            
+            await openai_ws.send(json.dumps(session_config))
+            logger.info("📋 Session configuration sent to OpenAI")
+            
+            # Start keepalive task
+            keepalive_task = asyncio.create_task(send_keepalive(openai_ws))
+            
+            # Handle bidirectional audio streaming
+            while openai_ws and not ws.closed:
+                try:
+                    # Receive from Twilio (non-blocking)
+                    try:
+                        twilio_message = ws.receive(timeout=0.1)
+                        if twilio_message:
+                            data = json.loads(twilio_message)
+                            
+                            if data['event'] == 'media':
+                                # Forward audio to OpenAI
+                                audio_payload = data['media']['payload']
+                                logger.debug(f"🔊 Forwarding {len(audio_payload)} bytes to OpenAI")
+                                
+                                await openai_ws.send(json.dumps({
+                                    "type": "input_audio_buffer.append",
+                                    "audio": audio_payload
+                                }))
+                    except:
+                        pass  # No message from Twilio
+                    
+                    # Receive from OpenAI (non-blocking)
+                    try:
+                        openai_message = await asyncio.wait_for(
+                            openai_ws.recv(),
+                            timeout=0.1
+                        )
+                        openai_data = json.loads(openai_message)
+                        
+                        if openai_data['type'] == 'response.audio.delta':
+                            # Forward audio response to Twilio
+                            logger.debug(f"🎤 Sending {len(openai_data['delta'])} bytes to Twilio")
+                            ws.send(json.dumps({
+                                "event": "media",
+                                "streamSid": stream_sid,
+                                "media": {
+                                    "payload": openai_data['delta']
+                                }
+                            }))
+                        elif openai_data['type'] == 'response.audio_transcript.delta':
+                            logger.info(f"🤖 AI: {openai_data.get('delta', '')}")
+                        elif openai_data['type'] == 'error':
+                            logger.error(f"❌ OpenAI error: {openai_data.get('error', {})}")
+                            
+                    except asyncio.TimeoutError:
+                        pass  # No message from OpenAI
+                        
+                except Exception as e:
+                    logger.error(f"❌ Bridge error: {e}")
+                    break
+            
+            # Cancel keepalive task
+            keepalive_task.cancel()
+        
+        except Exception as e:
+            logger.error(f"❌ OpenAI connection error: {e}")
+        finally:
+            if openai_ws:
+                await openai_ws.close()
+                logger.info("🔌 OpenAI connection closed")
+    
+    async def send_keepalive(openai_ws):
+        """Send periodic keepalive to OpenAI"""
+        while True:
+            try:
+                await asyncio.sleep(20)  # Every 20 seconds
+                await openai_ws.send(json.dumps({
+                    "type": "input_audio_buffer.commit"
+                }))
+                logger.debug("💓 Keepalive sent to OpenAI")
+            except:
+                break
     
     try:
         while True:
@@ -197,16 +348,12 @@ def media_stream(ws):
                 stream_sid = data['start'].get('streamSid')
                 call_sid = data['start'].get('callSid')
                 logger.info(f"📞 Call started: {stream_sid}, Call: {call_sid}")
-                # Call has started, you're now ready to handle audio
                 
-            elif event == 'media':
-                # Audio data from Twilio
-                audio_payload = data['media']['payload']
-                logger.info(f"🔊 Audio received: {len(audio_payload)} bytes")
-                # TODO: Forward to OpenAI here
+                # Start the OpenAI bridge
+                loop.run_until_complete(bridge_audio())
                 
             elif event == 'stop':
-                logger.info("📞 Call ended")
+                logger.info(f"📞 Call ended: {stream_sid}")
                 break
                 
     except Exception as e:
