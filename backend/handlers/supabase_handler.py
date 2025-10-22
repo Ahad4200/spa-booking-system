@@ -92,9 +92,9 @@ class SupabaseHandler:
             response = self.client.rpc(
                 'book_spa_slot',
                 {
-                    'p_customer_name': booking_data['name'],
-                    'p_customer_phone': booking_data['phone'],
-                    'p_booking_date': booking_data['date'],
+                    'p_customer_name': booking_data.get('name') or booking_data.get('customer_name'),
+                    'p_customer_phone': booking_data.get('phone') or booking_data.get('customer_phone'),
+                    'p_booking_date': booking_data.get('date') or booking_data.get('booking_date'),
                     'p_slot_start_time': start_time,
                     'p_slot_end_time': end_time
                 }
