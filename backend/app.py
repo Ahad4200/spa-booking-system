@@ -27,10 +27,28 @@ CORS(app, origins=['*'])
 # Validate configuration on startup
 Config.validate()
 
-# Initialize handlers
-twilio_handler = TwilioHandler()
-openai_handler = OpenAIHandler()
-supabase_handler = SupabaseHandler()
+# Initialize handlers (lazy loading)
+twilio_handler = None
+openai_handler = None
+supabase_handler = None
+
+def get_twilio_handler():
+    global twilio_handler
+    if twilio_handler is None:
+        twilio_handler = TwilioHandler()
+    return twilio_handler
+
+def get_openai_handler():
+    global openai_handler
+    if openai_handler is None:
+        openai_handler = OpenAIHandler()
+    return openai_handler
+
+def get_supabase_handler():
+    global supabase_handler
+    if supabase_handler is None:
+        supabase_handler = SupabaseHandler()
+    return supabase_handler
 
 @app.route('/', methods=['GET'])
 def health_check():
@@ -46,7 +64,7 @@ def test_database():
     """Test database connection"""
     try:
         # Test basic table access
-        result = supabase_handler.client.table('spa_bookings').select('id').limit(1).execute()
+        result = get_supabase_handler().client.table('spa_bookings').select('id').limit(1).execute()
         return jsonify({
             'status': 'success',
             'message': 'Supabase connection successful',
@@ -67,11 +85,11 @@ def incoming_call():
     """Twilio webhook for incoming calls"""
     try:
         logger.info("Incoming call received")
-        response = twilio_handler.handle_incoming_call(request)
+        response = get_twilio_handler().handle_incoming_call(request)
         return response
     except Exception as e:
         logger.error(f"Error handling incoming call: {str(e)}")
-        return str(twilio_handler.create_error_response()), 500
+        return str(get_twilio_handler().create_error_response()), 500
 
 @app.route('/webhook/call-status', methods=['POST'])
 def call_status():
@@ -84,7 +102,7 @@ def call_status():
         logger.info(f"Call status update: {call_sid} - {call_status}")
         
         # Update call session in database
-        supabase_handler.update_call_session(call_sid, {'status': call_status})
+        get_supabase_handler().update_call_session(call_sid, {'status': call_status})
         
         # End conversation logging if call completed
         if call_status in ['completed', 'busy', 'no-answer', 'failed']:
@@ -108,7 +126,7 @@ def function_handler():
         
         # Route to appropriate handler
         if function_name == 'check_slot_availability':
-            result = supabase_handler.check_slot_availability(
+            result = get_supabase_handler().check_slot_availability(
                 arguments['date'],
                 arguments['start_time']
             )
@@ -121,7 +139,7 @@ def function_handler():
                 'start_time': arguments.get('slot_start_time') or arguments.get('start_time'),
                 'end_time': arguments.get('slot_end_time') or arguments.get('end_time')
             }
-            result = supabase_handler.book_spa_slot(booking_data)
+            result = get_supabase_handler().book_spa_slot(booking_data)
         else:
             return jsonify({'error': 'Unknown function'}), 400
         
@@ -135,7 +153,7 @@ def function_handler():
 def get_bookings(date):
     """Get all bookings for a specific date (admin endpoint)"""
     try:
-        bookings = supabase_handler.get_bookings_for_date(date)
+        bookings = get_supabase_handler().get_bookings_for_date(date)
         return jsonify(bookings)
     except Exception as e:
         logger.error(f"Error fetching bookings: {str(e)}")
