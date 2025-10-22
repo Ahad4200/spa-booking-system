@@ -25,4 +25,4 @@ USER spa
 EXPOSE 5000
 
 # Run with gunicorn using gevent worker for WebSocket support
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--worker-class", "gevent", "--workers", "1", "--timeout", "120", "app:app"]
+CMD ["gunicorn", "--worker-class", "gevent", "--worker-connections", "1000", "--bind", "0.0.0.0:5000", "--workers", "1", "--timeout", "120", "app:app"]

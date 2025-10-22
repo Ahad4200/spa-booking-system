@@ -4,6 +4,7 @@ Handles incoming calls and coordinates between Twilio, OpenAI, and Supabase.
 """
 
 import logging
+import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sock import Sock
@@ -12,7 +13,6 @@ from handlers.twilio_handler import TwilioHandler
 from handlers.openai_handler import OpenAIHandler
 from handlers.supabase_handler import SupabaseHandler
 from conversation_logger import conversation_logger
-from websocket_server import TwilioMediaStreamHandler
 
 # Configure logging
 logging.basicConfig(
@@ -179,11 +179,43 @@ def internal_error(error):
 
 # WebSocket endpoint for Twilio Media Streams
 @sock.route('/media-stream')
-async def media_stream(ws):
+def media_stream(ws):
     """Handle WebSocket connection from Twilio Media Streams"""
-    logger.info("Twilio Media Stream WebSocket connected")
-    handler = TwilioMediaStreamHandler()
-    await handler.handle(ws)
+    logger.info("✅ Twilio Media Stream WebSocket connected")
+    
+    try:
+        while True:
+            # Receive message from Twilio
+            message = ws.receive()
+            if message is None:
+                break
+            
+            data = json.loads(message)
+            event = data.get('event')
+            
+            if event == 'start':
+                stream_sid = data['start'].get('streamSid')
+                call_sid = data['start'].get('callSid')
+                logger.info(f"📞 Call started: {stream_sid}, Call: {call_sid}")
+                # Call has started, you're now ready to handle audio
+                
+            elif event == 'media':
+                # Audio data from Twilio
+                audio_payload = data['media']['payload']
+                logger.info(f"🔊 Audio received: {len(audio_payload)} bytes")
+                # TODO: Forward to OpenAI here
+                
+            elif event == 'stop':
+                logger.info("📞 Call ended")
+                break
+                
+    except Exception as e:
+        logger.error(f"❌ WebSocket ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        logger.info("WebSocket closed")
+        ws.close()
 
 if __name__ == '__main__':
     logger.info(f"Starting spa booking system on port {Config.FLASK_PORT}")
