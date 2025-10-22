@@ -133,6 +133,10 @@ def function_handler():
         arguments = data.get('arguments', {})
         context = data.get('context', {})
         
+        # Auto-add phone from context if not provided
+        if 'phone_number' not in arguments and 'customer_phone' in context:
+            arguments['phone_number'] = context['customer_phone']
+        
         logger.info(f"Function call received: {function_name}")
         
         # Route to appropriate handler
@@ -144,13 +148,22 @@ def function_handler():
         elif function_name == 'book_spa_slot':
             # Map arguments to expected format
             booking_data = {
-                'name': arguments.get('customer_name'),
-                'phone': context.get('customer_phone') or arguments.get('customer_phone'),
-                'date': arguments.get('booking_date'),
+                'name': arguments.get('customer_name') or arguments.get('name'),
+                'phone': context.get('customer_phone') or arguments.get('customer_phone') or arguments.get('phone_number'),
+                'date': arguments.get('booking_date') or arguments.get('date'),
                 'start_time': arguments.get('slot_start_time') or arguments.get('start_time'),
                 'end_time': arguments.get('slot_end_time') or arguments.get('end_time')
             }
             result = get_supabase_handler().book_spa_slot(booking_data)
+        elif function_name == 'get_latest_appointment':
+            result = get_supabase_handler().get_latest_appointment(
+                arguments['phone_number']
+            )
+        elif function_name == 'delete_appointment':
+            result = get_supabase_handler().delete_appointment(
+                arguments['phone_number'],
+                arguments.get('booking_reference')
+            )
         else:
             return jsonify({'error': 'Unknown function'}), 400
         
@@ -276,6 +289,19 @@ CONVERSATION FLOW:
 5. Present available slots
 6. Check availability and book
 7. Confirm booking details
+
+ADDITIONAL CAPABILITIES:
+- If customer asks "What's my appointment?" or "Do I have a booking?", use get_latest_appointment with their phone number
+- If customer wants to cancel, first use get_latest_appointment to confirm, then use delete_appointment
+- Always confirm cancellation before proceeding: "Vuole cancellare la prenotazione del [date] alle [time]?"
+- After successful cancellation, offer to book a new slot
+
+CANCELLATION FLOW:
+1. Use get_latest_appointment to find their booking
+2. Confirm details with customer
+3. Ask for confirmation to cancel
+4. Use delete_appointment if confirmed
+5. Offer to book new appointment
 
 Be friendly, patient, and professional. Keep responses concise and natural.""",
                     "temperature": 0.7,

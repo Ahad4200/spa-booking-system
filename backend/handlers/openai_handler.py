@@ -154,6 +154,44 @@ class OpenAIHandler:
                         "required": ["name", "date", "start_time", "end_time"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_latest_appointment",
+                    "description": "Retrieve the most recent appointment for a customer by phone number",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "phone_number": {
+                                "type": "string",
+                                "description": "Customer's phone number"
+                            }
+                        },
+                        "required": ["phone_number"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "delete_appointment",
+                    "description": "Cancel/delete a customer's appointment",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "phone_number": {
+                                "type": "string",
+                                "description": "Customer's phone number"
+                            },
+                            "booking_reference": {
+                                "type": "string",
+                                "description": "Booking reference code (e.g., SPA-000123)"
+                            }
+                        },
+                        "required": ["phone_number"]
+                    }
+                }
             }
         ]
     

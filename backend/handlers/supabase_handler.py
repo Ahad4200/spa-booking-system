@@ -141,8 +141,91 @@ class SupabaseHandler:
             logger.error(f"Error fetching bookings: {str(e)}")
             return []
     
+    def get_latest_appointment(self, phone_number: str) -> Dict:
+        """Get the most recent appointment for a phone number"""
+        try:
+            response = self.client.rpc(
+                'get_latest_appointment',
+                {'p_phone_number': phone_number}
+            ).execute()
+            
+            result = response.data
+            if result.get('status') == 'success':
+                return {
+                    'found': True,
+                    'booking': result.get('booking'),
+                    'message': f"Trovata prenotazione per {result['booking']['date_formatted']} alle {result['booking']['time_slot']}"
+                }
+            else:
+                return {
+                    'found': False,
+                    'message': result.get('message', 'Nessuna prenotazione trovata')
+                }
+        except Exception as e:
+            logger.error(f"Error fetching appointment: {str(e)}")
+            return {
+                'found': False,
+                'error': str(e)
+            }
+
+    def delete_appointment(self, phone_number: str, booking_reference: str = None, booking_id: int = None) -> Dict:
+        """Cancel an appointment"""
+        try:
+            response = self.client.rpc(
+                'delete_appointment',
+                {
+                    'p_phone_number': phone_number,
+                    'p_booking_reference': booking_reference,
+                    'p_booking_id': booking_id
+                }
+            ).execute()
+            
+            result = response.data
+            return {
+                'success': result.get('status') == 'success',
+                'message': result.get('message'),
+                'cancelled_booking': result.get('cancelled_booking')
+            }
+        except Exception as e:
+            logger.error(f"Error deleting appointment: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    def get_all_appointments(self, phone_number: str, include_cancelled: bool = False) -> Dict:
+        """Get all appointments for a phone number"""
+        try:
+            response = self.client.rpc(
+                'get_all_appointments',
+                {
+                    'p_phone_number': phone_number,
+                    'p_include_cancelled': include_cancelled
+                }
+            ).execute()
+            
+            result = response.data
+            if result.get('status') == 'success':
+                return {
+                    'found': True,
+                    'bookings': result.get('bookings', []),
+                    'summary': result.get('summary', {}),
+                    'message': f"Trovate {result.get('summary', {}).get('total', 0)} prenotazioni"
+                }
+            else:
+                return {
+                    'found': False,
+                    'message': result.get('message', 'Nessuna prenotazione trovata')
+                }
+        except Exception as e:
+            logger.error(f"Error fetching appointments: {str(e)}")
+            return {
+                'found': False,
+                'error': str(e)
+            }
+
     def cancel_booking(self, booking_id: int) -> bool:
-        """Cancel a booking"""
+        """Cancel a booking (legacy method)"""
         try:
             self.client.table('spa_bookings')\
                 .delete()\

@@ -52,6 +52,9 @@ COMMENT ON COLUMN public.call_sessions.metadata IS 'Additional call data like du
 --                    CREATE FUNCIONS
 -- =====================================================
 
+-- =====================================================
+--                 Update Modified Column
+-- =====================================================
 -- Function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_modified_column()
 RETURNS TRIGGER AS $$
@@ -61,6 +64,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- =====================================================
+--                 Check Slot Availability
+-- =====================================================
 -- Function to check slot availability
 CREATE OR REPLACE FUNCTION public.check_slot_availability(
     p_date DATE,
@@ -118,6 +124,9 @@ EXCEPTION
 END;
 $$;
 
+-- =====================================================
+--                 Book Spa Slot
+-- =====================================================
 -- Function to book spa slot
 CREATE OR REPLACE FUNCTION public.book_spa_slot(
     p_customer_name TEXT,
@@ -220,6 +229,9 @@ EXCEPTION
 END;
 $$;
 
+-- =====================================================
+--               Get Daily Availability
+-- =====================================================
 -- Function to get daily availability summary
 CREATE OR REPLACE FUNCTION public.get_daily_availability(p_date DATE)
 RETURNS TABLE (
@@ -267,6 +279,282 @@ BEGIN
     FROM time_slots ts
     LEFT JOIN booking_counts bc ON ts.start_time = bc.slot_start_time
     ORDER BY ts.start_time;
+END;
+$$;
+
+-- =====================================================
+--                 Delete Appointment
+-- =====================================================
+-- Function to cancel/delete an appointment
+CREATE OR REPLACE FUNCTION public.delete_appointment(
+    p_phone_number TEXT,
+    p_booking_reference TEXT DEFAULT NULL,
+    p_booking_id BIGINT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_deleted_booking RECORD;
+    v_phone_formatted TEXT;
+BEGIN
+    -- Format phone number to match stored format
+    v_phone_formatted := TRIM(p_phone_number);
+    
+    -- Validate inputs
+    IF p_booking_reference IS NULL AND p_booking_id IS NULL THEN
+        RETURN jsonb_build_object(
+            'status', 'error',
+            'message', 'Deve fornire il codice di prenotazione o ID'
+        );
+    END IF;
+    
+    -- Find and delete the booking
+    IF p_booking_reference IS NOT NULL THEN
+        -- Delete by booking reference
+        DELETE FROM public.spa_bookings
+        WHERE booking_reference = p_booking_reference
+          AND customer_phone = v_phone_formatted
+          AND booking_date >= CURRENT_DATE  -- Can't delete past bookings
+          AND status = 'confirmed'
+        RETURNING * INTO v_deleted_booking;
+    ELSE
+        -- Delete by booking ID
+        DELETE FROM public.spa_bookings
+        WHERE id = p_booking_id
+          AND customer_phone = v_phone_formatted
+          AND booking_date >= CURRENT_DATE
+          AND status = 'confirmed'
+        RETURNING * INTO v_deleted_booking;
+    END IF;
+    
+    -- Check if booking was found and deleted
+    IF v_deleted_booking.id IS NULL THEN
+        -- Try to find why it wasn't deleted
+        IF EXISTS (
+            SELECT 1 FROM public.spa_bookings 
+            WHERE (booking_reference = p_booking_reference OR id = p_booking_id)
+            AND customer_phone != v_phone_formatted
+        ) THEN
+            RETURN jsonb_build_object(
+                'status', 'error',
+                'message', 'Numero di telefono non corrisponde alla prenotazione'
+            );
+        ELSIF EXISTS (
+            SELECT 1 FROM public.spa_bookings 
+            WHERE (booking_reference = p_booking_reference OR id = p_booking_id)
+            AND booking_date < CURRENT_DATE
+        ) THEN
+            RETURN jsonb_build_object(
+                'status', 'error',
+                'message', 'Non è possibile cancellare prenotazioni passate'
+            );
+        ELSE
+            RETURN jsonb_build_object(
+                'status', 'error',
+                'message', 'Prenotazione non trovata'
+            );
+        END IF;
+    END IF;
+    
+    -- Return success with deleted booking details
+    RETURN jsonb_build_object(
+        'status', 'success',
+        'message', format('Prenotazione cancellata con successo per %s alle %s del %s',
+            v_deleted_booking.customer_name,
+            to_char(v_deleted_booking.slot_start_time, 'HH24:MI'),
+            to_char(v_deleted_booking.booking_date, 'DD/MM/YYYY')
+        ),
+        'cancelled_booking', jsonb_build_object(
+            'id', v_deleted_booking.id,
+            'reference', v_deleted_booking.booking_reference,
+            'customer_name', v_deleted_booking.customer_name,
+            'date', v_deleted_booking.booking_date,
+            'time', to_char(v_deleted_booking.slot_start_time, 'HH24:MI') || ' - ' || 
+                    to_char(v_deleted_booking.slot_end_time, 'HH24:MI')
+        ),
+        'slot_freed', true
+    );
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN jsonb_build_object(
+            'status', 'error',
+            'message', 'Errore durante la cancellazione',
+            'error', SQLERRM
+        );
+END;
+$$;
+
+-- =====================================================
+--               Fetch Latest Appointment
+-- =====================================================
+-- Function to get the latest/most recent appointment for a phone number
+CREATE OR REPLACE FUNCTION public.get_latest_appointment(
+    p_phone_number TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_booking RECORD;
+    v_phone_formatted TEXT;
+    v_all_bookings JSONB;
+BEGIN
+    -- Format phone number
+    v_phone_formatted := TRIM(p_phone_number);
+    
+    -- Validate phone number
+    IF v_phone_formatted IS NULL OR v_phone_formatted = '' THEN
+        RETURN jsonb_build_object(
+            'status', 'error',
+            'message', 'Numero di telefono richiesto'
+        );
+    END IF;
+    
+    -- Find the most recent FUTURE booking first
+    SELECT * INTO v_booking
+    FROM public.spa_bookings
+    WHERE customer_phone = v_phone_formatted
+      AND booking_date >= CURRENT_DATE
+      AND status = 'confirmed'
+    ORDER BY booking_date ASC, slot_start_time ASC
+    LIMIT 1;
+    
+    -- If no future booking, get the most recent past booking
+    IF v_booking.id IS NULL THEN
+        SELECT * INTO v_booking
+        FROM public.spa_bookings
+        WHERE customer_phone = v_phone_formatted
+          AND status IN ('confirmed', 'completed')
+        ORDER BY booking_date DESC, slot_start_time DESC
+        LIMIT 1;
+    END IF;
+    
+    -- Check if any booking was found
+    IF v_booking.id IS NULL THEN
+        RETURN jsonb_build_object(
+            'status', 'error',
+            'message', 'Nessuna prenotazione trovata per questo numero',
+            'phone_searched', v_phone_formatted
+        );
+    END IF;
+    
+    -- Also get count of all bookings for this customer
+    SELECT jsonb_agg(
+        jsonb_build_object(
+            'date', booking_date,
+            'time', to_char(slot_start_time, 'HH24:MI'),
+            'status', status
+        ) ORDER BY booking_date DESC, slot_start_time DESC
+    ) INTO v_all_bookings
+    FROM public.spa_bookings
+    WHERE customer_phone = v_phone_formatted;
+    
+    -- Return the booking details
+    RETURN jsonb_build_object(
+        'status', 'success',
+        'booking', jsonb_build_object(
+            'id', v_booking.id,
+            'reference', v_booking.booking_reference,
+            'customer_name', v_booking.customer_name,
+            'customer_phone', v_booking.customer_phone,
+            'date', v_booking.booking_date,
+            'date_formatted', to_char(v_booking.booking_date, 'DD/MM/YYYY'),
+            'time_slot', to_char(v_booking.slot_start_time, 'HH24:MI') || ' - ' || 
+                        to_char(v_booking.slot_end_time, 'HH24:MI'),
+            'start_time', v_booking.slot_start_time,
+            'end_time', v_booking.slot_end_time,
+            'status', v_booking.status,
+            'is_future', v_booking.booking_date >= CURRENT_DATE,
+            'created_at', v_booking.created_at
+        ),
+        'total_bookings', jsonb_array_length(v_all_bookings),
+        'all_bookings', v_all_bookings
+    );
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN jsonb_build_object(
+            'status', 'error',
+            'message', 'Errore durante la ricerca',
+            'error', SQLERRM
+        );
+END;
+$$;
+
+-- =====================================================
+--                 Get All Appointments
+-- =====================================================
+-- Function to get ALL appointments for a phone number
+CREATE OR REPLACE FUNCTION public.get_all_appointments(
+    p_phone_number TEXT,
+    p_include_cancelled BOOLEAN DEFAULT FALSE
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_phone_formatted TEXT;
+    v_bookings JSONB;
+    v_future_count INT;
+    v_past_count INT;
+BEGIN
+    -- Format phone number
+    v_phone_formatted := TRIM(p_phone_number);
+    
+    -- Get all bookings
+    SELECT jsonb_agg(
+        jsonb_build_object(
+            'id', id,
+            'reference', booking_reference,
+            'customer_name', customer_name,
+            'date', booking_date,
+            'date_formatted', to_char(booking_date, 'DD/MM/YYYY'),
+            'time_slot', to_char(slot_start_time, 'HH24:MI') || ' - ' || 
+                        to_char(slot_end_time, 'HH24:MI'),
+            'status', status,
+            'is_future', booking_date >= CURRENT_DATE,
+            'can_cancel', booking_date >= CURRENT_DATE AND status = 'confirmed'
+        ) ORDER BY booking_date DESC, slot_start_time DESC
+    ) INTO v_bookings
+    FROM public.spa_bookings
+    WHERE customer_phone = v_phone_formatted
+      AND (p_include_cancelled = TRUE OR status != 'cancelled');
+    
+    -- Count future and past bookings
+    SELECT 
+        COUNT(*) FILTER (WHERE booking_date >= CURRENT_DATE AND status = 'confirmed'),
+        COUNT(*) FILTER (WHERE booking_date < CURRENT_DATE)
+    INTO v_future_count, v_past_count
+    FROM public.spa_bookings
+    WHERE customer_phone = v_phone_formatted;
+    
+    -- Check if any bookings found
+    IF v_bookings IS NULL THEN
+        RETURN jsonb_build_object(
+            'status', 'error',
+            'message', 'Nessuna prenotazione trovata per questo numero',
+            'phone_searched', v_phone_formatted
+        );
+    END IF;
+    
+    RETURN jsonb_build_object(
+        'status', 'success',
+        'customer_phone', v_phone_formatted,
+        'summary', jsonb_build_object(
+            'total', jsonb_array_length(v_bookings),
+            'future', v_future_count,
+            'past', v_past_count
+        ),
+        'bookings', v_bookings
+    );
 END;
 $$;
 
