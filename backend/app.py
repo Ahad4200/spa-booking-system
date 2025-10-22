@@ -118,8 +118,8 @@ def function_handler():
                 'name': arguments.get('customer_name'),
                 'phone': context.get('customer_phone') or arguments.get('customer_phone'),
                 'date': arguments.get('booking_date'),
-                'start_time': arguments.get('slot_start_time'),
-                'end_time': arguments.get('slot_end_time')
+                'start_time': arguments.get('slot_start_time') or arguments.get('start_time'),
+                'end_time': arguments.get('slot_end_time') or arguments.get('end_time')
             }
             result = supabase_handler.book_spa_slot(booking_data)
         else:
