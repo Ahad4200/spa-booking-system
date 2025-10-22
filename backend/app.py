@@ -81,6 +81,7 @@ def test_database():
         }), 500
 
 @app.route('/webhook/incoming-call', methods=['POST'])
+@app.route('/webhook/voice', methods=['POST'])
 def incoming_call():
     """Twilio webhook for incoming calls"""
     try:
