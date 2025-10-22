@@ -471,3 +471,24 @@ SELECT
     COUNT(*)
 FROM public.spa_bookings
 WHERE status = 'cancelled';
+
+-- =====================================================
+--     Keep Render VM warm so it dose not shutdown
+-- =====================================================
+
+-- 1. Enable extensions
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+CREATE EXTENSION IF NOT EXISTS pg_net;
+
+-- 2. Create the keep-warm job
+SELECT cron.schedule(
+  'keep-render-warm',
+  '*/10 * * * *',
+  $$SELECT net.http_get('https://spa-booking-system.onrender.com/');$$
+);
+
+-- 3. Verify it's working
+SELECT * FROM cron.job;
+
+-- Delete the existing keep-warm job
+-- SELECT cron.unschedule('keep-render-warm');
