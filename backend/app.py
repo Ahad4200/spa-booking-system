@@ -10,6 +10,7 @@ from config import Config
 from handlers.twilio_handler import TwilioHandler
 from handlers.openai_handler import OpenAIHandler
 from handlers.supabase_handler import SupabaseHandler
+from utils.conversation_logger import conversation_logger
 
 # Configure logging
 logging.basicConfig(
@@ -78,11 +79,16 @@ def call_status():
     try:
         call_sid = request.form.get('CallSid')
         call_status = request.form.get('CallStatus')
+        duration = request.form.get('Duration')
         
         logger.info(f"Call status update: {call_sid} - {call_status}")
         
         # Update call session in database
         supabase_handler.update_call_session(call_sid, {'status': call_status})
+        
+        # End conversation logging if call completed
+        if call_status in ['completed', 'busy', 'no-answer', 'failed']:
+            conversation_logger.end_session(call_sid, call_status)
         
         return '', 200
     except Exception as e:
@@ -107,9 +113,15 @@ def function_handler():
                 arguments['start_time']
             )
         elif function_name == 'book_spa_slot':
-            # Add phone number from context
-            arguments['phone'] = context.get('customer_phone')
-            result = supabase_handler.book_spa_slot(arguments)
+            # Map arguments to expected format
+            booking_data = {
+                'name': arguments.get('customer_name'),
+                'phone': context.get('customer_phone') or arguments.get('customer_phone'),
+                'date': arguments.get('booking_date'),
+                'start_time': arguments.get('slot_start_time'),
+                'end_time': arguments.get('slot_end_time')
+            }
+            result = supabase_handler.book_spa_slot(booking_data)
         else:
             return jsonify({'error': 'Unknown function'}), 400
         
