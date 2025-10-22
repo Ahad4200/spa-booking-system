@@ -53,6 +53,10 @@ class TwilioHandler:
                 url=f"wss://api.openai.com/v1/realtime?model={Config.OPENAI_MODEL}"
             )
             
+            # Add authentication header
+            stream.parameter(name='Authorization', value=f'Bearer {Config.OPENAI_API_KEY}')
+            stream.parameter(name='OpenAI-Beta', value='realtime=v1')
+            
             # Add custom parameters
             stream.parameter(name='customer_phone', value=caller_phone)
             stream.parameter(name='call_sid', value=call_sid)
