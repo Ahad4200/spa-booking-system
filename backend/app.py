@@ -10,7 +10,7 @@ from config import Config
 from handlers.twilio_handler import TwilioHandler
 from handlers.openai_handler import OpenAIHandler
 from handlers.supabase_handler import SupabaseHandler
-from utils.conversation_logger import conversation_logger
+from conversation_logger import conversation_logger
 
 # Configure logging
 logging.basicConfig(
