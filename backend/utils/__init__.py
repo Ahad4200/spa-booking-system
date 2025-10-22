@@ -5,12 +5,10 @@ Common utilities for the spa booking system.
 
 from .phone_formatter import PhoneFormatter
 from .time_slots import TimeSlotManager
-from .conversation_logger import conversation_logger
 
 __all__ = [
     'PhoneFormatter',
-    'TimeSlotManager',
-    'conversation_logger'
+    'TimeSlotManager'
 ]
 
 # Version info
