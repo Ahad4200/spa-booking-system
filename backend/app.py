@@ -6,6 +6,8 @@ Handles incoming calls and coordinates between Twilio, OpenAI, and Supabase.
 import logging
 import json
 import os
+import time
+import threading
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sock import Sock
@@ -14,6 +16,7 @@ from handlers.twilio_handler import TwilioHandler
 from handlers.openai_handler import OpenAIHandler
 from handlers.supabase_handler import SupabaseHandler
 from conversation_logger import conversation_logger
+import websocket
 
 # Configure logging
 logging.basicConfig(
@@ -182,15 +185,136 @@ def internal_error(error):
 @sock.route('/media-stream')
 def media_stream(ws):
     """
-    Twilio Media Stream handler - SYNCHRONOUS ONLY
-    No asyncio, no event loops, just simple blocking calls
+    Twilio Media Stream ↔ OpenAI Realtime API Bridge
+    Synchronous implementation with bidirectional audio streaming
     """
-    import time
-    
     stream_sid = None
     call_start_time = None
+    openai_ws = None
+    openai_thread = None
+    audio_queue = []
+    response_queue = []
     
     logger.info("✅ WebSocket connected - media_stream handler started")
+    
+    def on_openai_message(ws, message):
+        """Handle messages from OpenAI Realtime API"""
+        try:
+            data = json.loads(message)
+            
+            if data.get('type') == 'response.audio.delta':
+                # Forward audio response to Twilio
+                audio_delta = data.get('delta', '')
+                if audio_delta and stream_sid:
+                    logger.debug(f"🎤 Sending {len(audio_delta)} bytes to Twilio")
+                    ws.send(json.dumps({
+                        "event": "media",
+                        "streamSid": stream_sid,
+                        "media": {
+                            "payload": audio_delta
+                        }
+                    }))
+                    
+            elif data.get('type') == 'response.audio_transcript.delta':
+                # Log AI transcript
+                transcript = data.get('delta', '')
+                if transcript:
+                    logger.info(f"🤖 AI: {transcript}")
+                    
+            elif data.get('type') == 'error':
+                logger.error(f"❌ OpenAI error: {data.get('error', {})}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error processing OpenAI message: {e}")
+    
+    def on_openai_error(ws, error):
+        """Handle OpenAI WebSocket errors"""
+        logger.error(f"❌ OpenAI WebSocket error: {error}")
+    
+    def on_openai_close(ws, close_status_code, close_msg):
+        """Handle OpenAI WebSocket close"""
+        logger.info("🔌 OpenAI WebSocket closed")
+    
+    def connect_to_openai():
+        """Connect to OpenAI Realtime API in a separate thread"""
+        nonlocal openai_ws
+        
+        try:
+            logger.info("🔌 Connecting to OpenAI Realtime API...")
+            
+            # Create WebSocket connection to OpenAI
+            openai_ws = websocket.WebSocketApp(
+                f"wss://api.openai.com/v1/realtime?model={Config.OPENAI_MODEL}",
+                header={
+                    "Authorization": f"Bearer {Config.OPENAI_API_KEY}",
+                    "OpenAI-Beta": "realtime=v1"
+                },
+                on_message=on_openai_message,
+                on_error=on_openai_error,
+                on_close=on_openai_close
+            )
+            
+            # Send session configuration
+            session_config = {
+                "type": "session.update",
+                "session": {
+                    "modalities": ["text", "audio"],
+                    "input_audio_format": "g711_ulaw",
+                    "output_audio_format": "g711_ulaw",
+                    "voice": "alloy",
+                    "instructions": f"""You are a professional receptionist for {Config.SPA_NAME}, a luxury spa in Italy.
+
+Operating hours: 10:00 AM to 8:00 PM daily
+Session duration: {Config.SESSION_DURATION_HOURS} hours  
+Max capacity: {Config.MAX_CAPACITY_PER_SLOT} people per slot
+
+CONVERSATION FLOW:
+1. Greet in Italian or English
+2. Confirm phone number
+3. Ask for name
+4. Ask for preferred date
+5. Present available slots
+6. Check availability and book
+7. Confirm booking details
+
+Be friendly, patient, and professional. Keep responses concise and natural.""",
+                    "temperature": 0.7,
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 500
+                    }
+                }
+            }
+            
+            openai_ws.send(json.dumps(session_config))
+            logger.info("📋 Session configuration sent to OpenAI")
+            
+            # Start keepalive in background
+            def send_keepalive():
+                while openai_ws and openai_ws.sock:
+                    try:
+                        time.sleep(20)  # Every 20 seconds
+                        openai_ws.send(json.dumps({
+                            "type": "input_audio_buffer.commit"
+                        }))
+                        logger.debug("💓 Keepalive sent to OpenAI")
+                    except:
+                        break
+            
+            keepalive_thread = threading.Thread(target=send_keepalive, daemon=True)
+            keepalive_thread.start()
+            
+            # Run the WebSocket
+            openai_ws.run_forever()
+            
+        except Exception as e:
+            logger.error(f"❌ OpenAI connection error: {e}")
+        finally:
+            if openai_ws:
+                openai_ws.close()
+                logger.info("🔌 OpenAI connection closed")
     
     try:
         while True:
@@ -219,17 +343,28 @@ def media_stream(ws):
                 logger.info(f"📞 From: {data['start'].get('customParameters', {}).get('from', 'N/A')}")
                 logger.info(f"📞 ============================================\n")
                 
-                # TODO: Connect to OpenAI here (synchronously)
-                # For now, just acknowledge the connection
+                # Connect to OpenAI in a separate thread
+                openai_thread = threading.Thread(target=connect_to_openai, daemon=True)
+                openai_thread.start()
+                
+                # Wait a moment for OpenAI connection
+                time.sleep(2)
                 
             # ===== EVENT: MEDIA (Audio Data) =====
             elif event == 'media':
                 audio_payload = data['media']['payload']
-                # This is base64-encoded G.711 µ-law audio from Twilio
-                logger.info(f"🔊 Received {len(audio_payload)} bytes of audio")
+                logger.debug(f"🔊 Received {len(audio_payload)} bytes of audio")
                 
-                # TODO: Send this audio to OpenAI here
-                # openai_ws.send(json.dumps({...}))
+                # Send audio to OpenAI if connected
+                if openai_ws and openai_ws.sock:
+                    try:
+                        openai_ws.send(json.dumps({
+                            "type": "input_audio_buffer.append",
+                            "audio": audio_payload
+                        }))
+                        logger.debug(f"🔊 Forwarded {len(audio_payload)} bytes to OpenAI")
+                    except Exception as e:
+                        logger.error(f"❌ Error sending audio to OpenAI: {e}")
                 
             # ===== EVENT: STOP =====
             elif event == 'stop':
@@ -237,6 +372,10 @@ def media_stream(ws):
                 logger.info(f"\n📞 CALL ENDED")
                 logger.info(f"📞 Duration: {call_duration:.2f} seconds")
                 logger.info(f"📞 Stream SID: {stream_sid}\n")
+                
+                # Close OpenAI connection
+                if openai_ws:
+                    openai_ws.close()
                 break
             
             else:
@@ -250,6 +389,9 @@ def media_stream(ws):
         traceback.print_exc()
     
     finally:
+        # Clean up OpenAI connection
+        if openai_ws:
+            openai_ws.close()
         logger.info("🔌 WebSocket closing...")
         ws.close()
         logger.info("✅ WebSocket closed properly")

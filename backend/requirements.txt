@@ -14,5 +14,4 @@ pytz
 redis
 celery
 pydantic
-websockets
-aiohttp
+websocket-client
