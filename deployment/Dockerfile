@@ -24,5 +24,5 @@ USER spa
 # Expose port
 EXPOSE 5000
 
-# Run with gunicorn using eventlet worker for WebSocket support
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--worker-class", "eventlet", "--workers", "1", "--timeout", "120", "app:app"]
+# Run with gunicorn using gevent worker for WebSocket support
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--worker-class", "gevent", "--workers", "1", "--timeout", "120", "app:app"]

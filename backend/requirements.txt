@@ -1,13 +1,14 @@
 Flask
 flask-cors
-flask-socketio
+flask-sock
 python-dotenv
 twilio
 openai
 requests
 supabase
 gunicorn
-eventlet
+gevent
+gevent-websocket
 python-dateutil
 pytz
 redis
@@ -15,5 +16,3 @@ celery
 pydantic
 websockets
 aiohttp
-python-engineio
-python-socketio
