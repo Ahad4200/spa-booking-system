@@ -6,10 +6,12 @@ Handles incoming calls and coordinates between Twilio, OpenAI, and Supabase.
 import logging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 from config import Config
 from handlers.twilio_handler import TwilioHandler
 from handlers.openai_handler import OpenAIHandler
 from handlers.supabase_handler import SupabaseHandler
+from handlers.media_stream_handler import MediaStreamHandler
 from conversation_logger import conversation_logger
 
 # Configure logging
@@ -22,7 +24,11 @@ logger = logging.getLogger(__name__)
 # Initialize Flask app
 app = Flask(__name__)
 app.config.from_object(Config)
+app.config['SECRET_KEY'] = Config.SECRET_KEY
 CORS(app, origins=['*'])
+
+# Initialize Socket.IO
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Validate configuration on startup
 Config.validate()
@@ -31,6 +37,7 @@ Config.validate()
 twilio_handler = None
 openai_handler = None
 supabase_handler = None
+media_stream_handler = None
 
 def get_twilio_handler():
     global twilio_handler
@@ -49,6 +56,12 @@ def get_supabase_handler():
     if supabase_handler is None:
         supabase_handler = SupabaseHandler()
     return supabase_handler
+
+def get_media_stream_handler():
+    global media_stream_handler
+    if media_stream_handler is None:
+        media_stream_handler = MediaStreamHandler(socketio, get_supabase_handler())
+    return media_stream_handler
 
 @app.route('/', methods=['GET'])
 def health_check():
@@ -171,9 +184,36 @@ def internal_error(error):
     logger.error(f"Internal server error: {str(error)}")
     return jsonify({'error': 'Internal server error'}), 500
 
+# WebSocket handlers for Twilio Media Streams
+@socketio.on('connect', namespace='/media-stream')
+def handle_connect():
+    """Handle WebSocket connection from Twilio"""
+    logger.info(f"Twilio Media Stream connected: {request.sid}")
+    handler = get_media_stream_handler()
+    import asyncio
+    asyncio.create_task(handler.handle_twilio_connection(request.sid))
+
+@socketio.on('message', namespace='/media-stream')
+def handle_message(data):
+    """Handle incoming messages from Twilio Media Stream"""
+    try:
+        handler = get_media_stream_handler()
+        import asyncio
+        asyncio.create_task(handler._process_twilio_message(data, request.sid))
+    except Exception as e:
+        logger.error(f"Error handling media stream message: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+@socketio.on('disconnect', namespace='/media-stream')
+def handle_disconnect():
+    """Handle WebSocket disconnection"""
+    logger.info(f"Twilio Media Stream disconnected: {request.sid}")
+
 if __name__ == '__main__':
     logger.info(f"Starting spa booking system on port {Config.FLASK_PORT}")
-    app.run(
+    socketio.run(
+        app,
         host='0.0.0.0',
         port=Config.FLASK_PORT,
         debug=Config.DEBUG

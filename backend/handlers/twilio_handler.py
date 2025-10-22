@@ -47,15 +47,11 @@ class TwilioHandler:
                 language='it-IT'
             )
             
-            # Connect to OpenAI Realtime
+            # Connect to our WebSocket media stream handler
             connect = Connect()
-            stream = connect.stream(
-                url=f"wss://api.openai.com/v1/realtime?model={Config.OPENAI_MODEL}"
-            )
-            
-            # Add authentication header
-            stream.parameter(name='Authorization', value=f'Bearer {Config.OPENAI_API_KEY}')
-            stream.parameter(name='OpenAI-Beta', value='realtime=v1')
+            # Use our server's WebSocket endpoint (not direct to OpenAI)
+            ws_url = f"{Config.BASE_URL.replace('http', 'ws')}/media-stream"
+            stream = connect.stream(url=ws_url)
             
             # Add custom parameters
             stream.parameter(name='customer_phone', value=caller_phone)
