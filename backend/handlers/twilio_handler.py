@@ -7,6 +7,7 @@ from twilio.twiml.voice_response import VoiceResponse, Connect, Stream
 from twilio.rest import Client
 from config import Config
 from .supabase_handler import SupabaseHandler
+from conversation_logger import conversation_logger
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,9 @@ class TwilioHandler:
             caller_country = request.form.get('FromCountry', 'IT')
             
             logger.info(f"Incoming call from {caller_phone} (Call SID: {call_sid})")
+            
+            # Start conversation logging
+            conversation_logger.start_session(call_sid, caller_phone)
             
             # Store call session
             session_id = self.supabase.create_call_session({
