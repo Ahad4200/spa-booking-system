@@ -301,10 +301,10 @@ def media_stream(ws):
             # Create WebSocket connection to OpenAI
             openai_ws = websocket.WebSocketApp(
                 f"wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17",
-                header={
-                    "Authorization": f"Bearer {Config.OPENAI_API_KEY}",
-                    "OpenAI-Beta": "realtime=v1"
-                },
+                header=[
+                    f"Authorization: Bearer {Config.OPENAI_API_KEY}",
+                    "OpenAI-Beta: realtime=v1"
+                ],
                 on_message=on_openai_message,
                 on_error=on_openai_error,
                 on_close=on_openai_close
@@ -472,6 +472,14 @@ You are Sara, a warm and professional AI receptionist for {Config.SPA_NAME}, a l
         }
     }
 }
+            
+            # Wait for connection to be established
+            time.sleep(1)
+            
+            # Check if connection is still open
+            if not openai_ws or not openai_ws.sock:
+                logger.error("❌ OpenAI WebSocket connection failed to establish")
+                return
             
             openai_ws.send(json.dumps(session_config))
             logger.info("📋 Session configuration sent to OpenAI")
