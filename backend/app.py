@@ -134,16 +134,17 @@ def function_handler():
         arguments = data.get('arguments', {})
         context = data.get('context', {})
         
-        # Auto-add phone from context if not provided
-        # The phone number comes from Twilio call metadata
+        # Auto-add phone from Twilio call metadata
+        # The phone number comes from Twilio's {from} parameter
         if 'phone_number' not in arguments:
-            # Try to get phone from various context sources
-            phone = (context.get('customer_phone') or 
-                    context.get('caller_phone') or 
-                    context.get('from') or
+            # Try to get phone from Twilio call metadata
+            phone = (context.get('from') or 
+                    context.get('customer_phone') or 
+                    context.get('caller_phone') or
                     arguments.get('customer_phone'))
             if phone:
                 arguments['phone_number'] = phone
+                logger.info(f"Using phone number from Twilio: {phone}")
         
         logger.info(f"Function call received: {function_name}")
         
@@ -288,7 +289,7 @@ You are Sara, a warm and professional AI receptionist for {Config.SPA_NAME}, a l
 
 # Context
 - Current date/time: {datetime.now().strftime('%Y-%m-%d %H:%M')} Rome time (CEST/CET)
-- Caller's phone: Available from Twilio call metadata - NEVER ask for it
+- Caller's phone: {from} (automatically provided by Twilio - NEVER ask for it)
 - Operating hours: Monday-Saturday 10:00-20:00, Sunday CLOSED
 - Session duration: {Config.SESSION_DURATION_HOURS} hours per slot
 - Maximum capacity: {Config.MAX_CAPACITY_PER_SLOT} people per time slot
