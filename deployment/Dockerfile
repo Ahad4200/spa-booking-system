@@ -22,7 +22,7 @@ RUN useradd -m -u 1000 spa && chown -R spa:spa /app
 USER spa
 
 # Expose port
-EXPOSE 5000
+EXPOSE 10000
 
-# Run with gunicorn using gevent worker for WebSocket support
-CMD ["gunicorn", "--worker-class", "gevent", "--worker-connections", "1000", "--bind", "0.0.0.0:5000", "--workers", "1", "--timeout", "120", "app:app"]
+# Run with uvicorn for FastAPI
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "10000"]

@@ -1,0 +1,10 @@
+{
+  "function_name": "check_slot_availability",
+  "arguments": {
+    "date": "2025-10-24",
+    "start_time": "14:00"
+  },
+  "context": {
+    "from": "+1234567890"
+  }
+}

@@ -1,252 +1,59 @@
 """
-Main Flask application for the spa booking system.
-Handles incoming calls and coordinates between Twilio, OpenAI, and Supabase.
+Spa Booking System - FastAPI implementation with proper async WebSocket handling
+Handles Twilio Media Streams and OpenAI Realtime API integration
 """
 
-import logging
+import asyncio
+import base64
 import json
 import os
 import time
-import threading
-import asyncio
+import logging
 from datetime import datetime
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from flask_sock import Sock
-from config import Config
-from handlers.twilio_handler import TwilioHandler
-from handlers.openai_handler import OpenAIHandler
-from handlers.supabase_handler import SupabaseHandler
-from conversation_logger import conversation_logger
-from openai import AsyncOpenAI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
+from fastapi.responses import Response
+from fastapi.middleware.cors import CORSMiddleware
+import websockets
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
-    level=getattr(logging, Config.LOG_LEVEL),
-    format=Config.LOG_FORMAT
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app
-app = Flask(__name__)
-app.config.from_object(Config)
-app.config['SECRET_KEY'] = Config.SECRET_KEY
-CORS(app, origins=['*'])
+# Initialize FastAPI app
+app = FastAPI(title="Spa Booking System", version="1.0.0")
 
-# Initialize WebSocket support
-sock = Sock(app)
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Validate configuration on startup
-Config.validate()
+# Configuration
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+SPA_NAME = os.environ.get("SPA_NAME", "Santa Caterina Beauty Farm")
+SESSION_DURATION_HOURS = int(os.environ.get("SESSION_DURATION_HOURS", "2"))
+MAX_CAPACITY_PER_SLOT = int(os.environ.get("MAX_CAPACITY_PER_SLOT", "15"))
 
-# Initialize handlers (lazy loading)
-twilio_handler = None
-openai_handler = None
-supabase_handler = None
-
-def get_twilio_handler():
-    global twilio_handler
-    if twilio_handler is None:
-        twilio_handler = TwilioHandler()
-    return twilio_handler
-
-def get_openai_handler():
-    global openai_handler
-    if openai_handler is None:
-        openai_handler = OpenAIHandler()
-    return openai_handler
-
-def get_supabase_handler():
-    global supabase_handler
-    if supabase_handler is None:
-        supabase_handler = SupabaseHandler()
-    return supabase_handler
-
-@app.route('/', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'service': 'Spa Booking System',
-        'version': '1.0.0'
-    })
-
-
-@app.route('/test-db', methods=['GET'])
-def test_database():
-    """Test database connection"""
-    try:
-        # Test basic table access
-        result = get_supabase_handler().client.table('spa_bookings').select('id').limit(1).execute()
-        return jsonify({
-            'status': 'success',
-            'message': 'Supabase connection successful',
-            'database': 'reachable',
-            'tables': 'accessible',
-            'project_id': 'biaewzljhaowgaocxzxq'
-        })
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': 'Supabase connection failed',
-            'error': str(e),
-            'database': 'unreachable'
-        }), 500
-
-@app.route('/webhook/incoming-call', methods=['POST'])
-@app.route('/webhook/voice', methods=['POST'])
-def incoming_call():
-    """Twilio webhook for incoming calls"""
-    try:
-        logger.info("Incoming call received")
-        response = get_twilio_handler().handle_incoming_call(request)
-        return response
-    except Exception as e:
-        logger.error(f"Error handling incoming call: {str(e)}")
-        return str(get_twilio_handler().create_error_response()), 500
-
-@app.route('/webhook/call-status', methods=['POST'])
-def call_status():
-    """Twilio webhook for call status updates"""
-    try:
-        call_sid = request.form.get('CallSid')
-        call_status = request.form.get('CallStatus')
-        duration = request.form.get('Duration')
-        
-        logger.info(f"Call status update: {call_sid} - {call_status}")
-        
-        # Update call session in database
-        get_supabase_handler().update_call_session(call_sid, {'status': call_status})
-        
-        # End conversation logging if call completed
-        if call_status in ['completed', 'busy', 'no-answer', 'failed']:
-            conversation_logger.end_session(call_sid, call_status)
-        
-        return '', 200
-    except Exception as e:
-        logger.error(f"Error updating call status: {str(e)}")
-        return '', 500
-
-@app.route('/api/function-handler', methods=['POST'])
-def function_handler():
-    """Handle function calls from OpenAI assistant"""
-    try:
-        data = request.json
-        function_name = data.get('function_name')
-        arguments = data.get('arguments', {})
-        context = data.get('context', {})
-        
-        # Auto-add phone from Twilio call metadata
-        # The phone number comes from Twilio's {from} parameter
-        if 'phone_number' not in arguments:
-            # Try to get phone from Twilio call metadata
-            phone = (context.get('from') or 
-                    context.get('customer_phone') or 
-                    context.get('caller_phone') or
-                    arguments.get('customer_phone'))
-            if phone:
-                arguments['phone_number'] = phone
-                logger.info(f"Using phone number from Twilio: {phone}")
-        
-        logger.info(f"Function call received: {function_name}")
-        
-        # Route to appropriate handler
-        if function_name == 'check_slot_availability':
-            result = get_supabase_handler().check_slot_availability(
-                arguments['date'],
-                arguments['start_time']
-            )
-        elif function_name == 'book_spa_slot':
-            # Map arguments to expected format
-            booking_data = {
-                'name': arguments.get('customer_name') or arguments.get('name'),
-                'phone': context.get('customer_phone') or arguments.get('customer_phone') or arguments.get('phone_number'),
-                'date': arguments.get('booking_date') or arguments.get('date'),
-                'start_time': arguments.get('slot_start_time') or arguments.get('start_time'),
-                'end_time': arguments.get('slot_end_time') or arguments.get('end_time')
-            }
-            result = get_supabase_handler().book_spa_slot(booking_data)
-        elif function_name == 'get_latest_appointment':
-            result = get_supabase_handler().get_latest_appointment(
-                arguments['phone_number']
-            )
-        elif function_name == 'delete_appointment':
-            result = get_supabase_handler().delete_appointment(
-                arguments['phone_number'],
-                arguments.get('booking_reference')
-            )
-        else:
-            return jsonify({'error': 'Unknown function'}), 400
-        
-        return jsonify(result)
-    
-    except Exception as e:
-        logger.error(f"Error in function handler: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/bookings/<date>', methods=['GET'])
-def get_bookings(date):
-    """Get all bookings for a specific date (admin endpoint)"""
-    try:
-        bookings = get_supabase_handler().get_bookings_for_date(date)
-        return jsonify(bookings)
-    except Exception as e:
-        logger.error(f"Error fetching bookings: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.errorhandler(404)
-def not_found(error):
-    """Handle 404 errors"""
-    return jsonify({'error': 'Endpoint not found'}), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    """Handle 500 errors"""
-    logger.error(f"Internal server error: {str(error)}")
-    return jsonify({'error': 'Internal server error'}), 500
-
-# WebSocket endpoint for Twilio Media Streams
-@sock.route('/media-stream')
-def media_stream(ws):
-    """
-    Twilio Media Stream ↔ OpenAI Realtime API Bridge
-    Using official OpenAI SDK for reliable connection
-    """
-    stream_sid = None
-    call_start_time = None
-    openai_client = None
-    openai_connection = None
-    
-    logger.info("✅ WebSocket connected - media_stream handler started")
-    
-    async def handle_openai_connection():
-        """Handle OpenAI Realtime API connection using official SDK"""
-        nonlocal openai_client, openai_connection
-        
-        try:
-            logger.info("🔌 Connecting to OpenAI Realtime API using official SDK...")
-            
-            # Initialize OpenAI client
-            openai_client = AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
-            
-            # Connect to Realtime API
-            async with openai_client.realtime.connect(
-                model="gpt-4o-mini-realtime-preview-2024-12-17"
-            ) as connection:
-                openai_connection = connection
-                
-                # Configure session
-                await connection.session.update(session={
-                    'modalities': ['text', 'audio'],
-                    'instructions': f"""# Role
-You are Sara, a warm and professional AI receptionist for {Config.SPA_NAME}, a luxury wellness spa in Italy. You handle phone bookings with grace, patience, and efficiency.
+# System message for the AI
+SYSTEM_MESSAGE = f"""# Role
+You are Sara, a warm and professional AI receptionist for {SPA_NAME}, a luxury wellness spa in Italy. You handle phone bookings with grace, patience, and efficiency.
 
 # Context
 - Current date/time: {datetime.now().strftime('%Y-%m-%d %H:%M')} Rome time (CEST/CET)
 - Caller's phone: {{from}} (automatically provided by Twilio - NEVER ask for it)
 - Operating hours: Monday-Saturday 10:00-20:00, Sunday CLOSED
-- Session duration: {Config.SESSION_DURATION_HOURS} hours per slot
-- Maximum capacity: {Config.MAX_CAPACITY_PER_SLOT} people per time slot
+- Session duration: {SESSION_DURATION_HOURS} hours per slot
+- Maximum capacity: {MAX_CAPACITY_PER_SLOT} people per time slot
 - Available slots: 10:00-12:00, 12:00-14:00, 14:00-16:00, 16:00-18:00, 18:00-20:00
 
 # Primary Objectives
@@ -259,8 +66,8 @@ You are Sara, a warm and professional AI receptionist for {Config.SPA_NAME}, a l
 
 ## 1. NEW BOOKING Flow
 **Step 1 - Greeting & Intent**
-- Italian: "Buongiorno! Grazie per aver chiamato {Config.SPA_NAME}. Sono Sara. Come posso aiutarla oggi?"
-- English: "Good morning! Thank you for calling {Config.SPA_NAME}. This is Sara. How may I assist you today?"
+- Italian: "Buongiorno! Grazie per aver chiamato {SPA_NAME}. Sono Sara. Come posso aiutarla oggi?"
+- English: "Good morning! Thank you for calling {SPA_NAME}. This is Sara. How may I assist you today?"
 - Listen for language preference and continue in that language
 
 **Step 2 - Gather Information** (One question at a time)
@@ -361,7 +168,7 @@ You are Sara, a warm and professional AI receptionist for {Config.SPA_NAME}, a l
 "Per i prezzi aggiornati, la invito a consultare il nostro sito web o contattare la reception. Posso però aiutarla a prenotare il suo appuntamento."
 
 **"Can I book for multiple people?"**
-"Certo! Mi dica per quante persone e verifico la disponibilità. Ricordi che ogni slot può ospitare massimo {Config.MAX_CAPACITY_PER_SLOT} persone."
+"Certo! Mi dica per quante persone e verifico la disponibilità. Ricordi che ogni slot può ospitare massimo {MAX_CAPACITY_PER_SLOT} persone."
 
 **"I'm running late"**
 "La ringrazio per averci avvisato. Il suo appuntamento è confermato. Se ha bisogno di cambiarlo, posso aiutarla."
@@ -382,132 +189,225 @@ You are Sara, a warm and professional AI receptionist for {Config.SPA_NAME}, a l
 - Every call is important
 - Patience and warmth win customers
 - Confirm before acting
-- The phone number is already known - focus on helping""",
-                    'voice': 'alloy',
-                    'input_audio_format': 'g711_ulaw',
-                    'output_audio_format': 'g711_ulaw',
-                    'temperature': 0.7,
-                    'turn_detection': {
-                        'type': 'server_vad',
-                        'threshold': 0.5,
-                        'prefix_padding_ms': 300,
-                        'silence_duration_ms': 500
-                    }
-                })
-                
-                logger.info("📋 Session configuration sent to OpenAI")
-                
-                # Process events from OpenAI
-                async for event in connection:
-                    if event.type == 'response.audio.delta':
-                        # Forward audio response to Twilio
-                        if stream_sid:
-                            logger.debug(f"🎤 Sending {len(event.delta)} bytes to Twilio")
-                            ws.send(json.dumps({
-                                "event": "media",
-                                "streamSid": stream_sid,
-                                "media": {
-                                    "payload": event.delta
-                                }
-                            }))
-                    
-                    elif event.type == 'response.audio_transcript.delta':
-                        # Log AI transcript
-                        if event.delta:
-                            logger.info(f"🤖 AI: {event.delta}")
-                    
-                    elif event.type == 'error':
-                        logger.error(f"❌ OpenAI error: {event.error}")
-                
-        except Exception as e:
-            logger.error(f"❌ OpenAI connection error: {e}")
-        finally:
-            logger.info("🔌 OpenAI connection closed")
+- The phone number is already known - focus on helping"""
+
+@app.get("/")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "service": "Spa Booking System",
+        "version": "1.0.0"
+    }
+
+@app.post("/webhook/incoming-call")
+async def handle_incoming_call(request: Request):
+    """Twilio webhook - returns TwiML to connect to Media Stream"""
+    logger.info("📞 Incoming call received")
     
-    def run_openai_connection():
-        """Run the async OpenAI connection in a new event loop"""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(handle_openai_connection())
-        finally:
-            loop.close()
+    # Get the base URL for the WebSocket endpoint
+    base_url = os.environ.get("BASE_URL", "https://spa-booking-system.onrender.com")
+    websocket_url = f"{base_url}/media-stream"
+    
+    twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Connect>
+        <Stream url="{websocket_url}" />
+    </Connect>
+</Response>'''
+    
+    logger.info(f"📞 Returning TwiML with WebSocket URL: {websocket_url}")
+    return Response(content=twiml, media_type="application/xml")
+
+@app.websocket("/media-stream")
+async def media_stream_handler(twilio_ws: WebSocket):
+    """Handle bidirectional audio streaming between Twilio and OpenAI"""
+    logger.info("📞 Twilio WebSocket connected")
+    await twilio_ws.accept()
+    
+    stream_sid = None
+    call_start_time = None
     
     try:
-        while True:
-            # This blocks until a message arrives
-            message = ws.receive()
+        # Connect to OpenAI Realtime API
+        openai_url = "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17"
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "OpenAI-Beta": "realtime=v1"
+        }
+        
+        logger.info("🔌 Connecting to OpenAI Realtime API...")
+        async with websockets.connect(openai_url, extra_headers=headers) as openai_ws:
+            logger.info("✅ Connected to OpenAI Realtime API")
             
-            if message is None:
-                logger.info("❌ WebSocket closed by client")
-                break
+            # Send session configuration
+            session_config = {
+                "type": "session.update",
+                "session": {
+                    "modalities": ["text", "audio"],
+                    "instructions": SYSTEM_MESSAGE,
+                    "voice": "alloy",
+                    "input_audio_format": "g711_ulaw",
+                    "output_audio_format": "g711_ulaw",
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 500
+                    },
+                    "temperature": 0.7
+                }
+            }
+            await openai_ws.send(json.dumps(session_config))
+            logger.info("✅ Session configured")
             
-            try:
-                data = json.loads(message)
-            except json.JSONDecodeError:
-                logger.error(f"❌ Invalid JSON: {message}")
-                continue
+            # Task: Forward audio from Twilio to OpenAI
+            async def forward_twilio_to_openai():
+                """Receive audio from Twilio, send to OpenAI"""
+                nonlocal stream_sid, call_start_time
+                try:
+                    async for message in twilio_ws.iter_text():
+                        data = json.loads(message)
+                        
+                        if data['event'] == 'start':
+                            stream_sid = data['start']['streamSid']
+                            call_start_time = time.time()
+                            logger.info(f"📞 Stream started: {stream_sid}")
+                            logger.info(f"📞 From: {data['start'].get('customParameters', {}).get('from', 'N/A')}")
+                            
+                        elif data['event'] == 'media':
+                            # Forward audio to OpenAI
+                            audio_payload = data['media']['payload']
+                            logger.debug(f"🔊 Received {len(audio_payload)} bytes from Twilio")
+                            
+                            audio_append = {
+                                "type": "input_audio_buffer.append",
+                                "audio": audio_payload
+                            }
+                            await openai_ws.send(json.dumps(audio_append))
+                            logger.debug(f"🔊 Forwarded {len(audio_payload)} bytes to OpenAI")
+                            
+                        elif data['event'] == 'stop':
+                            call_duration = time.time() - call_start_time if call_start_time else 0
+                            logger.info(f"📞 Call ended - Duration: {call_duration:.2f} seconds")
+                            break
+                            
+                except WebSocketDisconnect:
+                    logger.info("❌ Twilio disconnected")
+                except Exception as e:
+                    logger.error(f"❌ Error in Twilio handler: {e}")
             
-            event = data.get('event')
+            # Task: Forward audio from OpenAI to Twilio
+            async def forward_openai_to_twilio():
+                """Receive responses from OpenAI, send to Twilio"""
+                try:
+                    async for message in openai_ws:
+                        response = json.loads(message)
+                        
+                        if response['type'] == 'session.updated':
+                            logger.info("✅ OpenAI session updated")
+                            
+                        elif response['type'] == 'response.audio.delta':
+                            # Forward audio response to Twilio
+                            if response.get('delta') and stream_sid:
+                                logger.debug(f"🎤 Sending {len(response['delta'])} bytes to Twilio")
+                                
+                                audio_message = {
+                                    "event": "media",
+                                    "streamSid": stream_sid,
+                                    "media": {
+                                        "payload": response['delta']
+                                    }
+                                }
+                                await twilio_ws.send_json(audio_message)
+                                
+                        elif response['type'] == 'input_audio_buffer.speech_started':
+                            logger.info("🎤 User started speaking")
+                            
+                        elif response['type'] == 'response.audio_transcript.delta':
+                            transcript = response.get('delta', '')
+                            if transcript:
+                                logger.info(f"🤖 AI: {transcript}")
+                                
+                        elif response['type'] == 'response.audio_transcript.done':
+                            transcript = response.get('transcript', '')
+                            if transcript:
+                                logger.info(f"🤖 AI completed: {transcript}")
+                                
+                        elif response['type'] == 'error':
+                            logger.error(f"❌ OpenAI error: {response.get('error', {})}")
+                            
+                except Exception as e:
+                    logger.error(f"❌ Error in OpenAI handler: {e}")
             
-            # ===== EVENT: START =====
-            if event == 'start':
-                stream_sid = data['start']['streamSid']
-                call_start_time = time.time()
-                logger.info(f"\n📞 ============================================")
-                logger.info(f"📞 CALL STARTED")
-                logger.info(f"📞 Stream SID: {stream_sid}")
-                logger.info(f"📞 From: {data['start'].get('customParameters', {}).get('from', 'N/A')}")
-                logger.info(f"📞 ============================================\n")
-                
-                # Start OpenAI connection in a separate thread
-                openai_thread = threading.Thread(target=run_openai_connection, daemon=True)
-                openai_thread.start()
-                
-                # Wait a moment for OpenAI connection
-                time.sleep(2)
-                
-            # ===== EVENT: MEDIA (Audio Data) =====
-            elif event == 'media':
-                audio_payload = data['media']['payload']
-                logger.debug(f"🔊 Received {len(audio_payload)} bytes of audio")
-                
-                # Send audio to OpenAI if connected
-                if openai_connection:
-                    try:
-                        # This would need to be handled in the async context
-                        # For now, we'll queue the audio
-                        logger.debug(f"🔊 Audio queued for OpenAI processing")
-                    except Exception as e:
-                        logger.error(f"❌ Error sending audio to OpenAI: {e}")
-                
-            # ===== EVENT: STOP =====
-            elif event == 'stop':
-                call_duration = time.time() - call_start_time if call_start_time else 0
-                logger.info(f"\n📞 CALL ENDED")
-                logger.info(f"📞 Duration: {call_duration:.2f} seconds")
-                logger.info(f"📞 Stream SID: {stream_sid}\n")
-                break
+            # Run both tasks concurrently
+            logger.info("🚀 Starting bidirectional audio streaming...")
+            await asyncio.gather(
+                forward_twilio_to_openai(),
+                forward_openai_to_twilio()
+            )
             
-            else:
-                logger.warning(f"⚠️  Unknown event: {event}")
-    
     except Exception as e:
-        logger.error(f"❌ ERROR in media_stream handler:")
-        logger.error(f"   Type: {type(e).__name__}")
-        logger.error(f"   Message: {str(e)}")
+        logger.error(f"❌ Error in media_stream handler: {e}")
         import traceback
         traceback.print_exc()
-    
     finally:
-        logger.info("🔌 WebSocket closing...")
-        ws.close()
-        logger.info("✅ WebSocket closed properly")
+        logger.info("🔌 WebSocket connection closed")
 
-if __name__ == '__main__':
-    logger.info(f"Starting spa booking system on port {Config.FLASK_PORT}")
-    app.run(
-        host='0.0.0.0',
-        port=Config.FLASK_PORT,
-        debug=Config.DEBUG
-    )
+@app.post("/api/function-handler")
+async def function_handler(request: Request):
+    """Handle function calls from OpenAI assistant"""
+    try:
+        data = await request.json()
+        function_name = data.get('function_name')
+        arguments = data.get('arguments', {})
+        context = data.get('context', {})
+        
+        logger.info(f"Function call received: {function_name}")
+        
+        # Auto-add phone from Twilio call metadata
+        if 'phone_number' not in arguments:
+            phone = (context.get('from') or 
+                    context.get('customer_phone') or 
+                    context.get('caller_phone') or
+                    arguments.get('customer_phone'))
+            if phone:
+                arguments['phone_number'] = phone
+                logger.info(f"Using phone number from Twilio: {phone}")
+        
+        # For now, return a simple response
+        # TODO: Implement actual Supabase integration
+        if function_name == 'check_slot_availability':
+            return {
+                "available": True,
+                "message": "Slot available with 13 spots remaining",
+                "spots_remaining": 13
+            }
+        elif function_name == 'book_spa_slot':
+            return {
+                "success": True,
+                "message": "Booking confirmed",
+                "booking_reference": "SPA-123456"
+            }
+        elif function_name == 'get_latest_appointment':
+            return {
+                "found": False,
+                "message": "No appointments found"
+            }
+        elif function_name == 'delete_appointment':
+            return {
+                "success": True,
+                "message": "Appointment cancelled"
+            }
+        else:
+            return {"error": "Unknown function"}
+        
+    except Exception as e:
+        logger.error(f"Error in function handler: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 10000))
+    logger.info(f"Starting spa booking system on port {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
