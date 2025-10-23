@@ -70,6 +70,40 @@ def health_check():
         'version': '1.0.0'
     })
 
+@app.route('/debug/env')
+def debug_env():
+    """Debug environment variables"""
+    import os
+    from dotenv import load_dotenv
+    
+    # Load .env file
+    load_dotenv()
+    
+    vars_to_check = [
+        'OPENAI_API_KEY',
+        'SUPABASE_URL', 
+        'SUPABASE_KEY',
+        'TWILIO_ACCOUNT_SID',
+        'TWILIO_AUTH_TOKEN',
+        'TWILIO_PHONE_NUMBER'
+    ]
+    
+    env_status = {}
+    for var in vars_to_check:
+        value = os.environ.get(var)
+        if value:
+            # Show first 10 chars for security
+            masked = value[:10] + "..." if len(value) > 10 else value
+            env_status[var] = f"SET ({masked})"
+        else:
+            env_status[var] = "NOT SET"
+    
+    return jsonify({
+        'environment_variables': env_status,
+        'python_version': os.sys.version,
+        'current_directory': os.getcwd()
+    })
+
 @app.route('/test-db', methods=['GET'])
 def test_database():
     """Test database connection"""
