@@ -3,7 +3,7 @@ flask-cors
 flask-sock
 python-dotenv
 twilio
-openai
+openai>=1.12.0
 requests
 supabase
 gunicorn
@@ -14,4 +14,3 @@ pytz
 redis
 celery
 pydantic
-websocket-client
