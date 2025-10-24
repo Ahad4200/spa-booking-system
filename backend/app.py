@@ -369,13 +369,12 @@ async def test_openai_connection():
         
         url = "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17"
         
-        async with websockets.connect(
-            url,
-            additional_headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "OpenAI-Beta": "realtime=v1"
-            }
-        ) as ws:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "OpenAI-Beta": "realtime=v1"
+        }
+        
+        async with websockets.connect(url, additional_headers=headers) as ws:
             logger.info("✅ Connected to OpenAI Realtime API")
             
             # Send session config
