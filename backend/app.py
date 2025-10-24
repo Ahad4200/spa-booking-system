@@ -354,6 +354,88 @@ async def media_stream_handler(twilio_ws: WebSocket):
     finally:
         logger.info("🔌 WebSocket connection closed")
 
+@app.get("/test-openai")
+async def test_openai_connection():
+    """Test OpenAI Realtime API connection from deployed server"""
+    import asyncio
+    import websockets
+    import json
+    
+    try:
+        logger.info("🧪 Testing OpenAI Realtime API connection...")
+        
+        if not OPENAI_API_KEY:
+            return {"error": "OPENAI_API_KEY not found", "status": "failed"}
+        
+        url = "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17"
+        
+        async with websockets.connect(
+            url,
+            extra_headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "OpenAI-Beta": "realtime=v1"
+            }
+        ) as ws:
+            logger.info("✅ Connected to OpenAI Realtime API")
+            
+            # Send session config
+            session_config = {
+                "type": "session.update",
+                "session": {
+                    "modalities": ["text", "audio"],
+                    "instructions": "You are a helpful spa booking assistant.",
+                    "input_audio_format": "g711_ulaw",
+                    "output_audio_format": "g711_ulaw",
+                    "voice": "alloy",
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 500
+                    },
+                    "temperature": 0.7
+                }
+            }
+            
+            await ws.send(json.dumps(session_config))
+            logger.info("📋 Session configuration sent")
+            
+            # Wait for response
+            response = await ws.recv()
+            data = json.loads(response)
+            
+            if data['type'] == 'session.updated':
+                logger.info("✅ Session configured successfully")
+                return {
+                    "status": "success",
+                    "message": "OpenAI Realtime API is ready for Twilio integration",
+                    "session_updated": True
+                }
+            else:
+                logger.error(f"❌ Unexpected response: {data}")
+                return {
+                    "status": "failed",
+                    "message": f"Unexpected response: {data['type']}",
+                    "response": data
+                }
+                
+    except websockets.exceptions.InvalidStatusCode as e:
+        if e.status_code == 401:
+            logger.error("❌ Authentication failed - check API key")
+            return {"status": "failed", "error": "Authentication failed - check API key"}
+        elif e.status_code == 404:
+            logger.error("❌ Model not found - check account access")
+            return {"status": "failed", "error": "Model not found - check account access"}
+        else:
+            logger.error(f"❌ HTTP {e.status_code}: {e}")
+            return {"status": "failed", "error": f"HTTP {e.status_code}: {e}"}
+    except websockets.exceptions.ConnectionClosed as e:
+        logger.error(f"❌ Connection closed: {e}")
+        return {"status": "failed", "error": f"Connection closed: {e}"}
+    except Exception as e:
+        logger.error(f"❌ OpenAI connection failed: {e}")
+        return {"status": "failed", "error": str(e)}
+
 @app.post("/api/function-handler")
 async def function_handler(request: Request):
     """Handle function calls from OpenAI assistant"""
