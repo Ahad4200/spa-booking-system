@@ -374,7 +374,7 @@ async def test_openai_connection():
             "OpenAI-Beta": "realtime=v1"
         }
         
-        async with websockets.connect(url, additional_headers=headers) as ws:
+        async with websockets.connect(url, extra_headers=headers) as ws:
             logger.info("✅ Connected to OpenAI Realtime API")
             
             # Send session config
