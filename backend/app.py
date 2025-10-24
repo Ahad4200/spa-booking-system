@@ -207,7 +207,8 @@ async def handle_incoming_call(request: Request):
     
     # Get the base URL for the WebSocket endpoint
     base_url = os.environ.get("BASE_URL", "https://spa-booking-system.onrender.com")
-    websocket_url = f"{base_url}/media-stream"
+    # Convert https:// to wss:// for WebSocket connections
+    websocket_url = base_url.replace("https://", "wss://") + "/media-stream"
     
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
