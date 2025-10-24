@@ -1,5 +1,8 @@
 FROM python:3.11-slim
 
+# Force rebuild by adding a comment with timestamp
+# Rebuild timestamp: 2025-10-24-19-00-00
+
 WORKDIR /app
 
 # Install system dependencies
