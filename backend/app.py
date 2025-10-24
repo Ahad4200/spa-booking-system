@@ -371,7 +371,7 @@ async def test_openai_connection():
         
         async with websockets.connect(
             url,
-            extra_headers={
+            additional_headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
                 "OpenAI-Beta": "realtime=v1"
             }
