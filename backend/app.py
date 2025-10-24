@@ -42,14 +42,14 @@ app.add_middleware(
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 VOICE = "alloy"
 
-def get_system_message(customer_phone):
+def get_system_message({{from}}):
     # Render all values before injecting into the prompt!
     return f"""# Role
 You are Sara, a warm and professional AI receptionist for {Config.SPA_NAME}, a luxury wellness spa in Italy. You handle phone bookings with grace, patience, and efficiency.
 
 # Context
 - Current date/time: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-- Caller's phone: {customer_phone} (automatically provided - NEVER ask for it)
+- Caller's phone: {from} (automatically provided - NEVER ask for it)
 - Operating hours: Monday-Saturday 10:00-20:00, Sunday CLOSED
 - Session duration: {Config.SESSION_DURATION_HOURS} hours per slot
 - Maximum capacity: {Config.MAX_CAPACITY_PER_SLOT} people per time slot
@@ -190,10 +190,7 @@ You are Sara, a warm and professional AI receptionist for {Config.SPA_NAME}, a l
 - Confirm before acting
 - The phone number is already known - focus on helping"""
 
-# Assuming you receive the caller's phone from Twilio metadata as "from"
-customer_phone = event.get("from")  # or however you extract it from the Twilio event
-
-SYSTEM_MESSAGE = get_system_message(customer_phone=customer_phone)
+# SYSTEM_MESSAGE will be generated dynamically when needed
 
 session_config = {
     "type": "session.update",
@@ -269,11 +266,12 @@ async def media_stream_handler(websocket: WebSocket):
             logger.info("✅ Connected to OpenAI Realtime API")
             
             # Initialize OpenAI session immediately
+            # Generate session config dynamically (phone will be extracted from Twilio events)
             session_config = {
                 "type": "session.update",
                 "session": {
                     "modalities": ["text", "audio"],
-                    "instructions": SYSTEM_MESSAGE,
+                    "instructions": get_system_message("+1234567890"),  # Placeholder, will be updated with real phone
                     "voice": VOICE,
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
