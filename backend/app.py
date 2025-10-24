@@ -403,12 +403,13 @@ async def test_openai_connection():
             response = await ws.recv()
             data = json.loads(response)
             
-            if data['type'] == 'session.updated':
+            if data['type'] in ['session.updated', 'session.created']:
                 logger.info("✅ Session configured successfully")
                 return {
                     "status": "success",
                     "message": "OpenAI Realtime API is ready for Twilio integration",
-                    "session_updated": True
+                    "session_created": True,
+                    "session_id": data.get('session', {}).get('id', 'unknown')
                 }
             else:
                 logger.error(f"❌ Unexpected response: {data}")
