@@ -780,3 +780,132 @@ SELECT * FROM cron.job;
 
 -- Delete the existing keep-warm job
 -- SELECT cron.unschedule('keep-render-warm');
+
+-- =====================================================
+--           CONVERSATION LOGGING TABLES
+-- =====================================================
+
+-- Main conversations table
+CREATE TABLE IF NOT EXISTS public.conversations (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    conversation_id TEXT UNIQUE NOT NULL, -- Usually stream_sid
+    customer_phone TEXT NOT NULL,
+    call_sid TEXT,
+    stream_sid TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ended_at TIMESTAMPTZ,
+    duration_seconds INTEGER,
+    model_used TEXT DEFAULT 'gpt-4o-mini-realtime-preview-2024-12-17',
+    total_turns INTEGER DEFAULT 0,
+    total_functions_called INTEGER DEFAULT 0,
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Conversation turns (user and assistant messages)
+CREATE TABLE IF NOT EXISTS public.conversation_turns (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    conversation_id UUID REFERENCES public.conversations(id) ON DELETE CASCADE,
+    turn_number INTEGER NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+    transcript TEXT,
+    audio_duration_ms INTEGER,
+    event_id TEXT,
+    item_id TEXT,
+    confidence_score DECIMAL(3,2), -- For transcription confidence
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Function calls logging
+CREATE TABLE IF NOT EXISTS public.function_calls (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    conversation_id UUID REFERENCES public.conversations(id) ON DELETE CASCADE,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    function_name TEXT NOT NULL,
+    arguments JSONB,
+    result JSONB,
+    success BOOLEAN DEFAULT true,
+    error_message TEXT,
+    execution_time_ms INTEGER,
+    call_id TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Create indexes for performance
+CREATE INDEX IF NOT EXISTS idx_conversations_customer_phone 
+ON public.conversations(customer_phone);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_call_sid 
+ON public.conversations(call_sid);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_started_at 
+ON public.conversations(started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_turns_conversation_id 
+ON public.conversation_turns(conversation_id);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_turns_timestamp 
+ON public.conversation_turns(timestamp);
+
+CREATE INDEX IF NOT EXISTS idx_function_calls_conversation_id 
+ON public.function_calls(conversation_id);
+
+CREATE INDEX IF NOT EXISTS idx_function_calls_function_name 
+ON public.function_calls(function_name);
+
+-- Create view for conversation summaries
+CREATE OR REPLACE VIEW conversation_summaries AS
+SELECT 
+    c.id,
+    c.conversation_id,
+    c.customer_phone,
+    c.started_at,
+    c.ended_at,
+    c.duration_seconds,
+    c.total_turns,
+    c.total_functions_called,
+    COUNT(DISTINCT ct.id) FILTER (WHERE ct.role = 'user') as user_turns,
+    COUNT(DISTINCT ct.id) FILTER (WHERE ct.role = 'assistant') as assistant_turns,
+    COUNT(DISTINCT fc.id) as function_calls_count,
+    MAX(sb.booking_reference) as booking_reference
+FROM public.conversations c
+LEFT JOIN public.conversation_turns ct ON c.id = ct.conversation_id
+LEFT JOIN public.function_calls fc ON c.id = fc.conversation_id
+LEFT JOIN public.spa_bookings sb ON sb.customer_phone = c.customer_phone 
+    AND sb.created_at BETWEEN c.started_at AND COALESCE(c.ended_at, NOW())
+GROUP BY c.id;
+
+-- Function to get conversation transcript
+CREATE OR REPLACE FUNCTION public.get_conversation_transcript(p_conversation_id UUID)
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_transcript TEXT := '';
+    v_turn RECORD;
+BEGIN
+    FOR v_turn IN 
+        SELECT 
+            TO_CHAR(timestamp, 'HH24:MI:SS') as time,
+            CASE role 
+                WHEN 'user' THEN 'Customer'
+                WHEN 'assistant' THEN 'AI Assistant'
+                ELSE role 
+            END as speaker,
+            transcript
+        FROM public.conversation_turns
+        WHERE conversation_id = p_conversation_id
+        ORDER BY timestamp ASC
+    LOOP
+        v_transcript := v_transcript || 
+            '[' || v_turn.time || '] ' || 
+            v_turn.speaker || ': ' || 
+            COALESCE(v_turn.transcript, '(no transcript)') || E'\n';
+    END LOOP;
+    
+    RETURN v_transcript;
+END;
+$$;
