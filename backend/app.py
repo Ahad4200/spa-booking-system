@@ -758,47 +758,41 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                 'p_start_time': start_time
             }).execute()
             
-            logger.info(f"RPC raw result: {result}")
+            logger.info(f"RPC raw result: {result.data}")
             
-            # FIXED: Handle Supabase response structure
-            # Supabase returns the JSONB result directly in result.data
-            if result.data is not None:
-                # If result.data is a list, get first element
-                if isinstance(result.data, list) and len(result.data) > 0:
-                    data = result.data[0]
-                # If it's already a dict, use it directly
-                elif isinstance(result.data, dict):
-                    data = result.data
-                else:
-                    # If it's a single value, wrap it
-                    data = {'result': result.data}
-                
-                logger.info(f"Parsed data: {data}")
-                
-                # Extract the actual result from the RPC function response
-                availability_result = data.get('check_slot_availability', {})
-                
-                if availability_result.get('status') == 'success':
-                    return {
-                        "available": availability_result.get('available', False),
-                        "spots_remaining": availability_result.get('spots_remaining', 0),
-                        "message": f"Slot available with {availability_result.get('spots_remaining')} spots"
-                    }
-                else:
-                    return {
-                        "available": False,
-                        "message": availability_result.get('message', 'Slot full')
-                    }
+            # Handle Supabase response
+            if result.data is None:
+                return {"available": False, "message": "No data returned"}
             
-            return {"available": False, "message": "No data returned from availability check"}
+            # RPC returns array, extract first element
+            if isinstance(result.data, list) and len(result.data) > 0:
+                data = result.data[0]
+            elif isinstance(result.data, dict):
+                data = result.data
+            else:
+                return {"available": False, "message": "Unexpected response format"}
+            
+            logger.info(f"✅ Parsed data: {data}")
+            
+            # ✅ FIX: Data IS the result directly, no nested key
+            if data.get('status') == 'success':
+                return {
+                    "available": data.get('available', False),
+                    "spots_remaining": data.get('spots_remaining', 0),
+                    "message": f"Slot available with {data.get('spots_remaining')} spots"
+                }
+            else:
+                return {
+                    "available": False,
+                    "message": data.get('message', 'Slot full')
+                }
         
         elif function_name == "book_spa_slot":
             # Format times for database
             start_time = format_time_for_db(arguments.get('start_time'))
-            # Calculate end time (2 hours later)
             end_time = calculate_end_time(arguments.get('start_time'))
             
-            logger.info(f"Booking with: name={arguments.get('name')}, phone={customer_phone}, date={arguments.get('date')}, start={start_time}, end={end_time}")
+            logger.info(f"Booking: name={arguments.get('name')}, phone={customer_phone}, date={arguments.get('date')}, start={start_time}, end={end_time}")
             
             # Call Supabase RPC function
             result = supabase.rpc('book_spa_slot', {
@@ -809,119 +803,84 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                 'p_slot_end_time': end_time
             }).execute()
             
-            logger.info(f"Booking RPC raw result: {result}")
-            logger.info(f"Result data type: {type(result.data)}")
-            logger.info(f"Result data content: {result.data}")
+            logger.info(f"Booking RPC result: {result.data}")
             
-            # COMPREHENSIVE DEBUGGING AND JSONB HANDLING
-            if result.data is not None:
-                # Handle different response formats
-                if isinstance(result.data, str):
-                    # If it's a string (JSONB as text), parse it as JSON
-                    try:
-                        data = json.loads(result.data)
-                        logger.info(f"Parsed JSON string: {data}")
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse JSON string: {e}")
-                        data = {"status": "error", "message": "Invalid JSON response"}
-                
-                elif isinstance(result.data, list) and len(result.data) > 0:
-                    # RPC functions return arrays, extract first element
-                    first_item = result.data[0]
-                    logger.info(f"First item type: {type(first_item)}")
-                    logger.info(f"First item content: {first_item}")
-                    
-                    # If first element is a string (JSONB as text), parse it
-                    if isinstance(first_item, str):
-                        try:
-                            data = json.loads(first_item)
-                            logger.info(f"Parsed JSON from string: {data}")
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Failed to parse JSON from string: {e}")
-                            data = first_item
-                    else:
-                        data = first_item
-                
-                elif isinstance(result.data, dict):
-                    data = result.data
-                    logger.info(f"Direct dict response: {data}")
-                
-                else:
-                    # Unexpected format
-                    logger.error(f"Unexpected response format: {type(result.data)}")
-                    data = {"status": "error", "message": f"Unexpected response type: {type(result.data)}"}
-                
-                logger.info(f"Final parsed data: {json.dumps(data, indent=2, default=str)}")
-                
-                # The RPC function now returns a structured type, not JSON
-                # The response will be a dict with the booking_result fields
-                booking_result = data
-                
-                if booking_result.get('status') == 'success':
-                    # Link booking to call session
-                    try:
-                        booking_id = booking_result.get('booking_id')
-                        if booking_id:
-                            supabase.table('call_sessions').update({
-                                'booking_id': booking_id
-                            }).eq('phone_number', customer_phone).eq('status', 'connected').execute()
-                    except Exception as e:
-                        logger.warning(f"Failed to link booking to call session: {e}")
-                    
-                    return {
-                        "success": True,
-                        "booking_reference": booking_result.get('booking_reference'),
-                        "message": f"Booking confirmed. Reference: {booking_result.get('booking_reference')}"
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "message": booking_result.get('message', 'Booking failed')
-                    }
+            # Handle response
+            if result.data is None:
+                return {"success": False, "message": "No data returned from booking"}
             
-            return {"success": False, "message": "No data returned from booking"}
+            # Extract from array
+            if isinstance(result.data, list) and len(result.data) > 0:
+                data = result.data[0]
+            elif isinstance(result.data, dict):
+                data = result.data
+            else:
+                return {"success": False, "message": f"Unexpected response type"}
+            
+            logger.info(f"✅ Booking data: {data}")
+            
+            # ✅ FIX: Use data directly - it's already the booking_result
+            if data.get('status') == 'success':
+                # Link to call session if needed
+                try:
+                    booking_id = data.get('booking_id')
+                    if booking_id:
+                        supabase.table('call_sessions').update({
+                            'booking_id': booking_id
+                        }).eq('phone_number', customer_phone).eq('status', 'connected').execute()
+                except Exception as e:
+                    logger.warning(f"Failed to link booking: {e}")
+                
+                return {
+                    "success": True,
+                    "booking_reference": data.get('booking_reference'),
+                    "booking_id": data.get('booking_id'),
+                    "message": data.get('message', f"Booking confirmed. Reference: {data.get('booking_reference')}")
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": data.get('message', 'Booking failed')
+                }
         
         elif function_name == "get_latest_appointment":
             logger.info(f"Getting latest appointment for: {customer_phone}")
             
-            # Call Supabase RPC function
             result = supabase.rpc('get_latest_appointment', {
                 'p_phone_number': customer_phone
             }).execute()
             
-            logger.info(f"Latest appointment RPC raw result: {result}")
+            logger.info(f"Latest appointment result: {result.data}")
             
-            # FIXED: Handle response structure
-            if result.data is not None:
-                if isinstance(result.data, list) and len(result.data) > 0:
-                    data = result.data[0]
-                elif isinstance(result.data, dict):
-                    data = result.data
-                else:
-                    data = {'result': result.data}
-                
-                logger.info(f"Parsed appointment data: {data}")
-                
-                # Extract the actual result from the RPC function response
-                appointment_result = data.get('get_latest_appointment', {})
-                
-                if appointment_result.get('status') == 'success':
-                    booking = appointment_result.get('booking', {})
-                    return {
-                        "found": True,
-                        "booking_reference": booking.get('reference'),
-                        "customer_name": booking.get('customer_name'),
-                        "date": booking.get('date_formatted'),
-                        "time": booking.get('time_slot'),
-                        "message": f"Found booking: {booking.get('reference')} for {booking.get('date_formatted')} at {booking.get('time_slot')}"
-                    }
-                else:
-                    return {
-                        "found": False,
-                        "message": appointment_result.get('message', 'No bookings found')
-                    }
+            if result.data is None:
+                return {"found": False, "message": "No data returned"}
             
-            return {"found": False, "message": "No data returned"}
+            # Extract from array
+            if isinstance(result.data, list) and len(result.data) > 0:
+                data = result.data[0]
+            elif isinstance(result.data, dict):
+                data = result.data
+            else:
+                return {"found": False, "message": "Unexpected response format"}
+            
+            logger.info(f"✅ Appointment data: {data}")
+            
+            # ✅ FIX: Use data directly
+            if data.get('status') == 'success':
+                booking = data.get('booking', {})
+                return {
+                    "found": True,
+                    "booking_reference": booking.get('reference'),
+                    "customer_name": booking.get('customer_name'),
+                    "date": booking.get('date_formatted'),
+                    "time": booking.get('time_slot'),
+                    "message": f"Found booking: {booking.get('reference')} for {booking.get('date_formatted')} at {booking.get('time_slot')}"
+                }
+            else:
+                return {
+                    "found": False,
+                    "message": data.get('message', 'No bookings found')
+                }
         
         elif function_name == "delete_appointment":
             booking_reference = arguments.get('booking_reference')
@@ -934,108 +893,61 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                     'p_phone_number': customer_phone
                 }).execute()
                 
-                logger.info(f"Latest appointment for deletion: {latest_result}")
-                
                 if latest_result.data:
-                    # Handle response structure
                     if isinstance(latest_result.data, list) and len(latest_result.data) > 0:
                         latest_data = latest_result.data[0]
                     elif isinstance(latest_result.data, dict):
                         latest_data = latest_result.data
                     else:
-                        latest_data = {}
+                        return {"success": False, "message": "No booking found to cancel"}
                     
                     if latest_data.get('status') == 'success':
                         booking = latest_data.get('booking', {})
                         booking_reference = booking.get('reference')
                     else:
-                        return {
-                            "success": False,
-                            "message": "No booking found to cancel"
-                        }
+                        return {"success": False, "message": "No booking found to cancel"}
                 else:
-                    return {
-                        "success": False,
-                        "message": "No booking found to cancel"
-                    }
+                    return {"success": False, "message": "No booking found to cancel"}
             
-            # Now delete the appointment
+            # Delete the appointment
             result = supabase.rpc('delete_appointment', {
                 'p_phone_number': customer_phone,
                 'p_booking_reference': booking_reference
             }).execute()
             
-            logger.info(f"Delete RPC raw result: {result}")
-            logger.info(f"Result data type: {type(result.data)}")
-            logger.info(f"Result data content: {result.data}")
+            logger.info(f"Delete result: {result.data}")
             
-            # COMPREHENSIVE DEBUGGING AND JSONB HANDLING
-            if result.data is not None:
-                # Handle different response formats
-                if isinstance(result.data, str):
-                    # If it's a string (JSONB as text), parse it as JSON
-                    try:
-                        data = json.loads(result.data)
-                        logger.info(f"Parsed JSON string: {data}")
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse JSON string: {e}")
-                        data = {"status": "error", "message": "Invalid JSON response"}
-                
-                elif isinstance(result.data, list) and len(result.data) > 0:
-                    # RPC functions return arrays, extract first element
-                    first_item = result.data[0]
-                    logger.info(f"First item type: {type(first_item)}")
-                    logger.info(f"First item content: {first_item}")
-                    
-                    # If first element is a string (JSONB as text), parse it
-                    if isinstance(first_item, str):
-                        try:
-                            data = json.loads(first_item)
-                            logger.info(f"Parsed JSON from string: {data}")
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Failed to parse JSON from string: {e}")
-                            data = first_item
-                    else:
-                        data = first_item
-                
-                elif isinstance(result.data, dict):
-                    data = result.data
-                    logger.info(f"Direct dict response: {data}")
-                
-                else:
-                    # Unexpected format
-                    logger.error(f"Unexpected response format: {type(result.data)}")
-                    data = {"status": "error", "message": f"Unexpected response type: {type(result.data)}"}
-                
-                logger.info(f"Final parsed data: {json.dumps(data, indent=2, default=str)}")
-                
-                # The RPC function now returns a structured type, not JSON
-                # The response will be a dict with the delete_result fields
-                delete_result = data
-                
-                if delete_result.get('status') == 'success':
-                    return {
-                        "success": True,
-                        "message": delete_result.get('message', 'Booking cancelled')
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "message": delete_result.get('message', 'Cancellation failed')
-                    }
+            if result.data is None:
+                return {"success": False, "message": "No data returned"}
             
-            return {"success": False, "message": "No data returned from cancellation"}
+            # Extract from array
+            if isinstance(result.data, list) and len(result.data) > 0:
+                data = result.data[0]
+            elif isinstance(result.data, dict):
+                data = result.data
+            else:
+                return {"success": False, "message": f"Unexpected response type"}
+            
+            logger.info(f"✅ Delete data: {data}")
+            
+            # ✅ FIX: Use data directly
+            if data.get('status') == 'success':
+                return {
+                    "success": True,
+                    "message": data.get('message', 'Booking cancelled successfully')
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": data.get('message', 'Cancellation failed')
+                }
         
         else:
             return {"error": f"Unknown function: {function_name}"}
             
     except Exception as e:
         logger.error(f"❌ Error executing {function_name}: {e}", exc_info=True)
-        # More detailed error information
-        error_details = str(e)
-        if hasattr(e, '__dict__'):
-            error_details = f"{error_details} - Details: {e.__dict__}"
-        return {"error": f"System error: {error_details}"}
+        return {"error": f"System error: {str(e)}"}
         
 # ============================================
 #     CONVERSATION EXPORT & ANALYTICS

@@ -909,3 +909,24 @@ BEGIN
     RETURN v_transcript;
 END;
 $$;
+
+-- ====================================
+--          BOOKING RESULT TYPE
+-- ====================================
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_type
+        WHERE typname = 'booking_result'
+    ) THEN
+        CREATE TYPE booking_result AS (
+            status TEXT,
+            message TEXT,
+            booking_id BIGINT,
+            booking_reference TEXT,
+            details JSONB
+        );
+    END IF;
+END
+$$;
