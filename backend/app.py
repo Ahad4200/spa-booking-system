@@ -10,6 +10,7 @@ import os
 import time
 import logging
 from datetime import datetime
+from urllib.parse import quote
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Form
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -224,23 +225,29 @@ async def health_check():
 async def handle_incoming_call(From: str = Form(...), CallSid: str = Form(...)):
     """Twilio webhook - captures caller phone and returns TwiML with custom parameters"""
     logger.info(f"📞 Incoming call from {From} (CallSid: {CallSid})")
+    logger.info(f"🔍 DEBUG: From parameter = '{From}' (type: {type(From)})")
     
     # Get the base URL for the WebSocket endpoint
     base_url = os.environ.get("BASE_URL", "https://spa-booking-system.onrender.com")
     # Convert https:// to wss:// for WebSocket connections
     websocket_url = base_url.replace("https://", "wss://") + "/media-stream"
     
+    # URL encode the phone number to preserve + symbol
+    customer_phone_encoded = quote(From, safe='+')
+    call_sid_encoded = quote(CallSid, safe='')
+    
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
         <Stream url="{websocket_url}">
-            <Parameter name="customerPhone" value="{From}" />
-            <Parameter name="callSid" value="{CallSid}" />
+            <Parameter name="customerPhone" value="{customer_phone_encoded}" />
+            <Parameter name="callSid" value="{call_sid_encoded}" />
         </Stream>
     </Connect>
 </Response>'''
     
     logger.info(f"📞 Returning TwiML with WebSocket URL: {websocket_url}")
+    logger.info(f"🔍 DEBUG: TwiML output:\n{twiml}")
     return Response(content=twiml, media_type="application/xml")
 
 @app.websocket("/media-stream")
@@ -291,10 +298,12 @@ async def media_stream_handler(websocket: WebSocket):
             logger.info("✅ OpenAI session configured")
             
             stream_sid = None
+            customer_phone = None
+            call_sid = None
             
             # Task 1: Receive from Twilio and forward to OpenAI
             async def receive_from_twilio():
-                nonlocal stream_sid
+                nonlocal stream_sid, customer_phone, call_sid
                 try:
                     async for message in websocket.iter_text():
                         try:
@@ -312,6 +321,9 @@ async def media_stream_handler(websocket: WebSocket):
                             elif event_type == 'start':
                                 stream_sid = data['start'].get('streamSid')
                                 
+                                # DEBUG: Log the raw start event data
+                                logger.info(f"🔍 DEBUG: Start event data = {json.dumps(data, indent=2)}")
+                                
                                 # Extract custom parameters (phone number and call SID)
                                 custom_params = data['start'].get('customParameters', {})
                                 customer_phone = custom_params.get('customerPhone', 'Unknown')
@@ -319,6 +331,7 @@ async def media_stream_handler(websocket: WebSocket):
                                 
                                 logger.info(f"✅ Start event received, streamSid: {stream_sid}")
                                 logger.info(f"📞 Customer phone: {customer_phone}, CallSid: {call_sid}")
+                                logger.info(f"🔍 DEBUG: Extracted customer_phone = '{customer_phone}' (type: {type(customer_phone)})")
                                 
                                 # Update OpenAI session with real customer phone number
                                 updated_session_config = {
@@ -329,6 +342,7 @@ async def media_stream_handler(websocket: WebSocket):
                                 }
                                 await openai_ws.send(json.dumps(updated_session_config))
                                 logger.info(f"✅ Updated OpenAI session with customer phone: {customer_phone}")
+                                logger.info(f"🔍 DEBUG: Session update = {json.dumps(updated_session_config, indent=2)}")
                                 continue
                             
                             # Handle media events (audio packets)
