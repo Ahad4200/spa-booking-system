@@ -742,23 +742,42 @@ async def media_stream_handler(websocket: WebSocket):
 async def execute_function(function_name: str, arguments: dict, customer_phone: str) -> dict:
     """Execute the requested function using Supabase RPC calls"""
     
-    logger.info(f"📋 Executing: {function_name}")
+    logger.info(f"📋 Executing: {function_name} with args: {arguments}")
     
     try:
         if function_name == "check_slot_availability":
+            # Format time for database (add :00 for seconds)
             start_time = format_time_for_db(arguments.get('start_time'))
             date = arguments.get('date')
             
+            logger.info(f"Calling RPC with date={date}, start_time={start_time}")
+            
+            # Call Supabase RPC function
             result = supabase.rpc('check_slot_availability', {
                 'p_date': date,
                 'p_start_time': start_time
             }).execute()
             
-            if result.data:
-                data = result.data
+            logger.info(f"RPC raw result: {result}")
+            
+            # FIXED: Handle Supabase response structure
+            # Supabase returns the JSONB result directly in result.data
+            if result.data is not None:
+                # If result.data is a list, get first element
+                if isinstance(result.data, list) and len(result.data) > 0:
+                    data = result.data[0]
+                # If it's already a dict, use it directly
+                elif isinstance(result.data, dict):
+                    data = result.data
+                else:
+                    # If it's a single value, wrap it
+                    data = {'result': result.data}
+                
+                logger.info(f"Parsed data: {data}")
+                
                 if data.get('status') == 'success':
                     return {
-                        "available": True,
+                        "available": data.get('available', False),
                         "spots_remaining": data.get('spots_remaining', 0),
                         "message": f"Slot available with {data.get('spots_remaining')} spots"
                     }
@@ -768,12 +787,17 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                         "message": data.get('message', 'Slot full')
                     }
             
-            return {"available": False, "message": "Error checking availability"}
+            return {"available": False, "message": "No data returned from availability check"}
         
         elif function_name == "book_spa_slot":
+            # Format times for database
             start_time = format_time_for_db(arguments.get('start_time'))
+            # Calculate end time (2 hours later)
             end_time = calculate_end_time(arguments.get('start_time'))
             
+            logger.info(f"Booking with: name={arguments.get('name')}, phone={customer_phone}, date={arguments.get('date')}, start={start_time}, end={end_time}")
+            
+            # Call Supabase RPC function
             result = supabase.rpc('book_spa_slot', {
                 'p_customer_name': arguments.get('name'),
                 'p_customer_phone': customer_phone,
@@ -782,8 +806,20 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                 'p_slot_end_time': end_time
             }).execute()
             
-            if result.data:
-                data = result.data
+            logger.info(f"Booking RPC raw result: {result}")
+            
+            # FIXED: Handle response structure
+            if result.data is not None:
+                # Handle list or dict response
+                if isinstance(result.data, list) and len(result.data) > 0:
+                    data = result.data[0]
+                elif isinstance(result.data, dict):
+                    data = result.data
+                else:
+                    data = {'result': result.data}
+                
+                logger.info(f"Parsed booking data: {data}")
+                
                 if data.get('status') == 'success':
                     # Link booking to call session
                     try:
@@ -792,8 +828,8 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                             supabase.table('call_sessions').update({
                                 'booking_id': booking_id
                             }).eq('phone_number', customer_phone).eq('status', 'connected').execute()
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Failed to link booking to call session: {e}")
                     
                     return {
                         "success": True,
@@ -806,15 +842,29 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                         "message": data.get('message', 'Booking failed')
                     }
             
-            return {"success": False, "message": "Booking error"}
+            return {"success": False, "message": "No data returned from booking"}
         
         elif function_name == "get_latest_appointment":
+            logger.info(f"Getting latest appointment for: {customer_phone}")
+            
+            # Call Supabase RPC function
             result = supabase.rpc('get_latest_appointment', {
                 'p_phone_number': customer_phone
             }).execute()
             
-            if result.data:
-                data = result.data
+            logger.info(f"Latest appointment RPC raw result: {result}")
+            
+            # FIXED: Handle response structure
+            if result.data is not None:
+                if isinstance(result.data, list) and len(result.data) > 0:
+                    data = result.data[0]
+                elif isinstance(result.data, dict):
+                    data = result.data
+                else:
+                    data = {'result': result.data}
+                
+                logger.info(f"Parsed appointment data: {data}")
+                
                 if data.get('status') == 'success':
                     booking = data.get('booking', {})
                     return {
@@ -828,13 +878,15 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                 else:
                     return {
                         "found": False,
-                        "message": "No bookings found"
+                        "message": data.get('message', 'No bookings found')
                     }
             
-            return {"found": False, "message": "No bookings found"}
+            return {"found": False, "message": "No data returned"}
         
         elif function_name == "delete_appointment":
             booking_reference = arguments.get('booking_reference')
+            
+            logger.info(f"Deleting appointment: {booking_reference} for {customer_phone}")
             
             if not booking_reference:
                 # Get latest appointment first
@@ -842,22 +894,50 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                     'p_phone_number': customer_phone
                 }).execute()
                 
-                if latest_result.data and latest_result.data.get('status') == 'success':
-                    booking = latest_result.data.get('booking', {})
-                    booking_reference = booking.get('reference')
+                logger.info(f"Latest appointment for deletion: {latest_result}")
+                
+                if latest_result.data:
+                    # Handle response structure
+                    if isinstance(latest_result.data, list) and len(latest_result.data) > 0:
+                        latest_data = latest_result.data[0]
+                    elif isinstance(latest_result.data, dict):
+                        latest_data = latest_result.data
+                    else:
+                        latest_data = {}
+                    
+                    if latest_data.get('status') == 'success':
+                        booking = latest_data.get('booking', {})
+                        booking_reference = booking.get('reference')
+                    else:
+                        return {
+                            "success": False,
+                            "message": "No booking found to cancel"
+                        }
                 else:
                     return {
                         "success": False,
                         "message": "No booking found to cancel"
                     }
             
+            # Now delete the appointment
             result = supabase.rpc('delete_appointment', {
                 'p_phone_number': customer_phone,
                 'p_booking_reference': booking_reference
             }).execute()
             
-            if result.data:
-                data = result.data
+            logger.info(f"Delete RPC raw result: {result}")
+            
+            # FIXED: Handle response structure
+            if result.data is not None:
+                if isinstance(result.data, list) and len(result.data) > 0:
+                    data = result.data[0]
+                elif isinstance(result.data, dict):
+                    data = result.data
+                else:
+                    data = {'result': result.data}
+                
+                logger.info(f"Parsed delete data: {data}")
+                
                 if data.get('status') == 'success':
                     return {
                         "success": True,
@@ -869,15 +949,19 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                         "message": data.get('message', 'Cancellation failed')
                     }
             
-            return {"success": False, "message": "Cancellation error"}
+            return {"success": False, "message": "No data returned from cancellation"}
         
         else:
             return {"error": f"Unknown function: {function_name}"}
             
     except Exception as e:
-        logger.error(f"Error executing {function_name}: {e}", exc_info=True)
-        return {"error": f"System error: {str(e)}"}
-
+        logger.error(f"❌ Error executing {function_name}: {e}", exc_info=True)
+        # More detailed error information
+        error_details = str(e)
+        if hasattr(e, '__dict__'):
+            error_details = f"{error_details} - Details: {e.__dict__}"
+        return {"error": f"System error: {error_details}"}
+        
 # ============================================
 #     CONVERSATION EXPORT & ANALYTICS
 # ============================================
@@ -1026,3 +1110,67 @@ if __name__ == "__main__":
     logger.info(f"📝 Conversation Logging: ENABLED")
     logger.info(f"🔧 Tool Calling: ENABLED")
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+    """
+## 3. Test Your Implementation
+
+### Test Conversation Logging:
+```bash
+# Check recent conversations
+curl http://localhost:10000/api/conversations/recent
+
+# Get specific conversation transcript
+curl http://localhost:10000/api/conversations/{conversation_id}/transcript
+
+# Export full conversation data
+curl http://localhost:10000/api/conversations/{conversation_id}/export
+```
+
+### Test Tool Calling:
+```bash
+# Test check availability
+curl -X POST http://localhost:10000/api/function-handler \
+  -H "Content-Type: application/json" \
+  -d '{
+    "function_name": "check_slot_availability",
+    "arguments": {"date": "2024-01-25", "start_time": "14:00"}
+  }'
+
+# Test booking
+curl -X POST http://localhost:10000/api/function-handler \
+  -H "Content-Type: application/json" \
+  -d '{
+    "function_name": "book_spa_slot",
+    "arguments": {"name": "Test User", "date": "2024-01-25", "start_time": "14:00"},
+    "customer_phone": "+39 333 123 4567"
+  }'
+```
+
+## Key Features Implemented:
+
+### ✅ Conversation Logging (ElevenLabs-style):
+- Complete transcript capture (user + assistant)
+- Function call logging with results
+- Turn-by-turn conversation tracking
+- Duration and metadata tracking
+- Export functionality
+- Analytics views
+
+### ✅ Tool Calling:
+- All 4 functions properly configured
+- Clear, non-overlapping descriptions
+- Proper result handling
+- Error management
+- Execution time tracking
+- Success/failure logging
+
+### ✅ Production Features:
+- Comprehensive error handling
+- Detailed logging throughout
+- Database persistence
+- Real-time transcript streaming
+- Function call tracking
+- Conversation analytics
+
+The system now provides complete conversation logging like ElevenLabs with full tool calling support!
+    """
