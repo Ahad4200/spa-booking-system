@@ -10,7 +10,7 @@ import os
 import time
 import logging
 from datetime import datetime
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Form
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 import websockets
@@ -42,14 +42,14 @@ app.add_middleware(
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 VOICE = "alloy"
 
-def get_system_message({{from}}):
+def get_system_message(caller_phone):
     # Render all values before injecting into the prompt!
     return f"""# Role
 You are Sara, a warm and professional AI receptionist for {Config.SPA_NAME}, a luxury wellness spa in Italy. You handle phone bookings with grace, patience, and efficiency.
 
 # Context
 - Current date/time: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-- Caller's phone: {from} (automatically provided - NEVER ask for it)
+- Caller's phone: {caller_phone} (automatically provided - NEVER ask for it)
 - Operating hours: Monday-Saturday 10:00-20:00, Sunday CLOSED
 - Session duration: {Config.SESSION_DURATION_HOURS} hours per slot
 - Maximum capacity: {Config.MAX_CAPACITY_PER_SLOT} people per time slot
@@ -221,9 +221,9 @@ async def health_check():
     }
 
 @app.post("/webhook/incoming-call")
-async def handle_incoming_call(request: Request):
-    """Twilio webhook - returns TwiML to connect to Media Stream"""
-    logger.info("📞 Incoming call received")
+async def handle_incoming_call(From: str = Form(...), CallSid: str = Form(...)):
+    """Twilio webhook - captures caller phone and returns TwiML with custom parameters"""
+    logger.info(f"📞 Incoming call from {From} (CallSid: {CallSid})")
     
     # Get the base URL for the WebSocket endpoint
     base_url = os.environ.get("BASE_URL", "https://spa-booking-system.onrender.com")
@@ -233,7 +233,10 @@ async def handle_incoming_call(request: Request):
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
-        <Stream url="{websocket_url}" />
+        <Stream url="{websocket_url}">
+            <Parameter name="customerPhone" value="{From}" />
+            <Parameter name="callSid" value="{CallSid}" />
+        </Stream>
     </Connect>
 </Response>'''
     
@@ -308,7 +311,24 @@ async def media_stream_handler(websocket: WebSocket):
                             # Handle start event (stream initialization)
                             elif event_type == 'start':
                                 stream_sid = data['start'].get('streamSid')
+                                
+                                # Extract custom parameters (phone number and call SID)
+                                custom_params = data['start'].get('customParameters', {})
+                                customer_phone = custom_params.get('customerPhone', 'Unknown')
+                                call_sid = custom_params.get('callSid', 'Unknown')
+                                
                                 logger.info(f"✅ Start event received, streamSid: {stream_sid}")
+                                logger.info(f"📞 Customer phone: {customer_phone}, CallSid: {call_sid}")
+                                
+                                # Update OpenAI session with real customer phone number
+                                updated_session_config = {
+                                    "type": "session.update",
+                                    "session": {
+                                        "instructions": get_system_message(customer_phone)
+                                    }
+                                }
+                                await openai_ws.send(json.dumps(updated_session_config))
+                                logger.info(f"✅ Updated OpenAI session with customer phone: {customer_phone}")
                                 continue
                             
                             # Handle media events (audio packets)
