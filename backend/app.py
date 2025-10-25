@@ -775,16 +775,19 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                 
                 logger.info(f"Parsed data: {data}")
                 
-                if data.get('status') == 'success':
+                # Extract the actual result from the RPC function response
+                availability_result = data.get('check_slot_availability', {})
+                
+                if availability_result.get('status') == 'success':
                     return {
-                        "available": data.get('available', False),
-                        "spots_remaining": data.get('spots_remaining', 0),
-                        "message": f"Slot available with {data.get('spots_remaining')} spots"
+                        "available": availability_result.get('available', False),
+                        "spots_remaining": availability_result.get('spots_remaining', 0),
+                        "message": f"Slot available with {availability_result.get('spots_remaining')} spots"
                     }
                 else:
                     return {
                         "available": False,
-                        "message": data.get('message', 'Slot full')
+                        "message": availability_result.get('message', 'Slot full')
                     }
             
             return {"available": False, "message": "No data returned from availability check"}
@@ -820,10 +823,13 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                 
                 logger.info(f"Parsed booking data: {data}")
                 
-                if data.get('status') == 'success':
+                # Extract the actual result from the RPC function response
+                booking_result = data.get('book_spa_slot', {})
+                
+                if booking_result.get('status') == 'success':
                     # Link booking to call session
                     try:
-                        booking_id = data.get('booking_id')
+                        booking_id = booking_result.get('booking_id')
                         if booking_id:
                             supabase.table('call_sessions').update({
                                 'booking_id': booking_id
@@ -833,13 +839,13 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                     
                     return {
                         "success": True,
-                        "booking_reference": data.get('booking_reference'),
-                        "message": f"Booking confirmed. Reference: {data.get('booking_reference')}"
+                        "booking_reference": booking_result.get('booking_reference'),
+                        "message": f"Booking confirmed. Reference: {booking_result.get('booking_reference')}"
                     }
                 else:
                     return {
                         "success": False,
-                        "message": data.get('message', 'Booking failed')
+                        "message": booking_result.get('message', 'Booking failed')
                     }
             
             return {"success": False, "message": "No data returned from booking"}
@@ -865,8 +871,11 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                 
                 logger.info(f"Parsed appointment data: {data}")
                 
-                if data.get('status') == 'success':
-                    booking = data.get('booking', {})
+                # Extract the actual result from the RPC function response
+                appointment_result = data.get('get_latest_appointment', {})
+                
+                if appointment_result.get('status') == 'success':
+                    booking = appointment_result.get('booking', {})
                     return {
                         "found": True,
                         "booking_reference": booking.get('reference'),
@@ -878,7 +887,7 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                 else:
                     return {
                         "found": False,
-                        "message": data.get('message', 'No bookings found')
+                        "message": appointment_result.get('message', 'No bookings found')
                     }
             
             return {"found": False, "message": "No data returned"}
@@ -938,15 +947,18 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                 
                 logger.info(f"Parsed delete data: {data}")
                 
-                if data.get('status') == 'success':
+                # Extract the actual result from the RPC function response
+                delete_result = data.get('delete_appointment', {})
+                
+                if delete_result.get('status') == 'success':
                     return {
                         "success": True,
-                        "message": data.get('message', 'Booking cancelled')
+                        "message": delete_result.get('message', 'Booking cancelled')
                     }
                 else:
                     return {
                         "success": False,
-                        "message": data.get('message', 'Cancellation failed')
+                        "message": delete_result.get('message', 'Cancellation failed')
                     }
             
             return {"success": False, "message": "No data returned from cancellation"}
