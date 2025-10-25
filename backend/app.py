@@ -12,6 +12,7 @@ import logging
 from datetime import datetime
 from urllib.parse import quote
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Form
+from twilio.twiml.voice_response import VoiceResponse, Connect, Stream
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 import websockets
@@ -222,33 +223,32 @@ async def health_check():
     }
 
 @app.post("/webhook/incoming-call")
-async def handle_incoming_call(From: str = Form(...), CallSid: str = Form(...)):
-    """Twilio webhook - captures caller phone and returns TwiML with custom parameters"""
-    logger.info(f"📞 Incoming call from {From} (CallSid: {CallSid})")
-    logger.info(f"🔍 DEBUG: From parameter = '{From}' (type: {type(From)})")
+async def handle_incoming_call(
+    From: str = Form(...),
+    CallSid: str = Form(...),
+    To: str = Form(...)
+):
+    """
+    Twilio webhook - receives call information.
+    From: Caller's phone number (e.g., "+15551234567")
+    """
+    logger.info(f"📞 Incoming call: From={From}, CallSid={CallSid}, To={To}")
     
-    # Get the base URL for the WebSocket endpoint
-    base_url = os.environ.get("BASE_URL", "https://spa-booking-system.onrender.com")
-    # Convert https:// to wss:// for WebSocket connections
-    websocket_url = base_url.replace("https://", "wss://") + "/media-stream"
+    # Use Twilio helper library for proper encoding
+    response = VoiceResponse()
+    connect = Connect()
+    stream = Stream(url=f'wss://{os.getenv("RENDER_EXTERNAL_HOSTNAME", "spa-booking-system.onrender.com")}/media-stream')
     
-    # URL encode the phone number to preserve + symbol
-    customer_phone_encoded = quote(From, safe='+')
-    call_sid_encoded = quote(CallSid, safe='')
+    # Pass phone number as custom parameter
+    stream.parameter(name='customerPhone', value=From)
+    stream.parameter(name='callSid', value=CallSid)
+    stream.parameter(name='twilioNumber', value=To)
     
-    twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Connect>
-        <Stream url="{websocket_url}">
-            <Parameter name="customerPhone" value="{customer_phone_encoded}" />
-            <Parameter name="callSid" value="{call_sid_encoded}" />
-        </Stream>
-    </Connect>
-</Response>'''
+    connect.append(stream)
+    response.append(connect)
     
-    logger.info(f"📞 Returning TwiML with WebSocket URL: {websocket_url}")
-    logger.info(f"🔍 DEBUG: TwiML output:\n{twiml}")
-    return Response(content=twiml, media_type="application/xml")
+    logger.info(f"📤 Sending TwiML:\n{str(response)}")
+    return Response(content=str(response), media_type='application/xml')
 
 @app.websocket("/media-stream")
 async def media_stream_handler(websocket: WebSocket):
@@ -275,34 +275,17 @@ async def media_stream_handler(websocket: WebSocket):
         ) as openai_ws:
             logger.info("✅ Connected to OpenAI Realtime API")
             
-            # Phase 1: Basic session config (NO customer-specific info yet)
-            initial_session_config = {
-                "type": "session.update",
-                "session": {
-                    "modalities": ["text", "audio"],
-                    "voice": VOICE,
-                    "input_audio_format": "g711_ulaw",
-                    "output_audio_format": "g711_ulaw",
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": 0.5,
-                        "prefix_padding_ms": 300,
-                        "silence_duration_ms": 500
-                    },
-                    "temperature": 0.7,
-                    "instructions": "You are a helpful spa booking assistant. Please wait while I get your information."
-                }
-            }
-            await openai_ws.send(json.dumps(initial_session_config))
-            logger.info("✅ OpenAI session initialized (basic config)")
+            logger.info("🔌 Connected to OpenAI")
             
+            # Shared state between tasks
             stream_sid = None
             customer_phone = None
             call_sid = None
+            session_initialized = False
             
             # Task 1: Receive from Twilio and forward to OpenAI
             async def receive_from_twilio():
-                nonlocal stream_sid, customer_phone, call_sid
+                nonlocal stream_sid, customer_phone, call_sid, session_initialized
                 try:
                     async for message in websocket.iter_text():
                         try:
@@ -311,52 +294,46 @@ async def media_stream_handler(websocket: WebSocket):
                             
                             logger.info(f"📨 Event received: {event_type}")
                             
-                            # Handle connected event (protocol handshake)
                             if event_type == 'connected':
-                                logger.info("✅ Twilio protocol connected")
-                                continue
+                                logger.info("📨 Twilio protocol connected")
                             
-                            # Handle start event (stream initialization)
                             elif event_type == 'start':
+                                # Extract stream metadata
                                 stream_sid = data['start'].get('streamSid')
                                 
-                                # DEBUG: Log the raw start event data
-                                logger.info(f"🔍 DEBUG: Start event data = {json.dumps(data, indent=2)}")
-                                
-                                # Extract custom parameters (phone number and call SID)
+                                # Extract custom parameters (CORRECT nested path)
                                 custom_params = data['start'].get('customParameters', {})
                                 customer_phone = custom_params.get('customerPhone', 'Unknown')
                                 call_sid = custom_params.get('callSid', 'Unknown')
                                 
-                                logger.info(f"✅ Start event received, streamSid: {stream_sid}")
-                                logger.info(f"📞 Customer phone: {customer_phone}, CallSid: {call_sid}")
-                                logger.info(f"🔍 DEBUG: Extracted customer_phone = '{customer_phone}' (type: {type(customer_phone)})")
+                                logger.info(f"✅ Stream started:")
+                                logger.info(f"   StreamSid: {stream_sid}")
+                                logger.info(f"   Customer: {customer_phone}")
+                                logger.info(f"   CallSid: {call_sid}")
                                 
-                                # Phase 2: Update session with REAL customer phone number
-                                customer_session_config = {
+                                # NOW initialize session with customer info
+                                session_config = {
                                     "type": "session.update",
                                     "session": {
-                                        "modalities": ["text", "audio"],
+                                        "modalities": ["audio", "text"],
                                         "voice": VOICE,
                                         "input_audio_format": "g711_ulaw",
                                         "output_audio_format": "g711_ulaw",
                                         "turn_detection": {
                                             "type": "server_vad",
                                             "threshold": 0.5,
-                                            "prefix_padding_ms": 300,
                                             "silence_duration_ms": 500
                                         },
-                                        "temperature": 0.7,
-                                        "instructions": get_system_message(customer_phone)
+                                        "instructions": get_system_message(customer_phone),
+                                        "temperature": 0.8
                                     }
                                 }
-                                await openai_ws.send(json.dumps(customer_session_config))
-                                logger.info(f"✅ Updated OpenAI session with customer phone: {customer_phone}")
-                                logger.info(f"🔍 DEBUG: Customer session config = {json.dumps(customer_session_config, indent=2)}")
-                                continue
+                                
+                                await openai_ws.send(json.dumps(session_config))
+                                session_initialized = True
+                                logger.info("🔧 OpenAI session initialized with customer phone")
                             
-                            # Handle media events (audio packets)
-                            elif event_type == 'media' and stream_sid:
+                            elif event_type == 'media' and session_initialized:
                                 audio_payload = data['media']['payload']
                                 audio_append = {
                                     "type": "input_audio_buffer.append",
@@ -365,9 +342,8 @@ async def media_stream_handler(websocket: WebSocket):
                                 await openai_ws.send(json.dumps(audio_append))
                                 logger.info(f"🔊 Forwarded audio to OpenAI: {len(audio_payload)} bytes")
                             
-                            # Handle stop event (stream termination)
                             elif event_type == 'stop':
-                                logger.info("📞 Stream stopped")
+                                logger.info("📞 Call ended")
                                 break
                                 
                         except json.JSONDecodeError as e:
@@ -379,42 +355,20 @@ async def media_stream_handler(websocket: WebSocket):
                 except Exception as e:
                     logger.error(f"Error in receive_from_twilio: {e}", exc_info=True)
             
-            # Task 2: Receive from OpenAI and forward to Twilio
             async def send_to_twilio():
+                nonlocal stream_sid
+                
                 try:
-                    async for openai_message in openai_ws:
-                        try:
-                            response = json.loads(openai_message)
-                            response_type = response.get('type')
-                            
-                            if response_type == 'session.updated':
-                                logger.info("✅ OpenAI session updated")
-                                
-                            elif response_type == 'response.audio.delta' and stream_sid:
-                                # Forward audio response to Twilio
-                                audio_delta = response.get('delta', '')
-                                if audio_delta:
-                                    audio_message = {
-                                        "event": "media",
-                                        "streamSid": stream_sid,
-                                        "media": {
-                                            "payload": audio_delta
-                                        }
-                                    }
-                                    await websocket.send_json(audio_message)
-                                    logger.info(f"🔊 Forwarded audio to Twilio: {len(audio_delta)} bytes")
-                            
-                            elif response_type == 'input_audio_buffer.speech_started':
-                                logger.info("🎤 User started speaking")
-                                
-                            elif response_type == 'response.audio_transcript.done':
-                                transcript = response.get('transcript', '')
-                                logger.info(f"🤖 AI said: {transcript}")
-                                
-                        except Exception as e:
-                            logger.error(f"Error processing OpenAI message: {e}")
-                            continue
-                            
+                    async for message in openai_ws:
+                        response = json.loads(message)
+                        
+                        if response.get('type') == 'response.audio.delta' and stream_sid:
+                            await websocket.send_json({
+                                "event": "media",
+                                "streamSid": stream_sid,
+                                "media": {"payload": response.get('delta')}
+                            })
+                
                 except Exception as e:
                     logger.error(f"Error in send_to_twilio: {e}", exc_info=True)
             
