@@ -764,13 +764,21 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
             if result.data is None:
                 return {"available": False, "message": "No data returned"}
             
-            # RPC returns array, extract first element
-            if isinstance(result.data, list) and len(result.data) > 0:
+            # Handle TEXT return type - same as book_spa_slot
+            if isinstance(result.data, str):
+                # TEXT return type - parse as JSON
+                try:
+                    data = json.loads(result.data)
+                    logger.info(f"✅ Parsed JSON from string: {data}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse JSON string: {e}")
+                    return {"available": False, "message": "Failed to parse response"}
+            elif isinstance(result.data, list) and len(result.data) > 0:
                 data = result.data[0]
             elif isinstance(result.data, dict):
                 data = result.data
             else:
-                return {"available": False, "message": "Unexpected response format"}
+                return {"available": False, "message": f"Unexpected response format: {type(result.data)}"}
             
             logger.info(f"✅ Parsed data: {data}")
             
@@ -863,13 +871,21 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
             if result.data is None:
                 return {"found": False, "message": "No data returned"}
             
-            # Extract from array
-            if isinstance(result.data, list) and len(result.data) > 0:
+            # Handle TEXT return type - same as other functions
+            if isinstance(result.data, str):
+                # TEXT return type - parse as JSON
+                try:
+                    data = json.loads(result.data)
+                    logger.info(f"✅ Parsed JSON from string: {data}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse JSON string: {e}")
+                    return {"found": False, "message": "Failed to parse response"}
+            elif isinstance(result.data, list) and len(result.data) > 0:
                 data = result.data[0]
             elif isinstance(result.data, dict):
                 data = result.data
             else:
-                return {"found": False, "message": "Unexpected response format"}
+                return {"found": False, "message": f"Unexpected response format: {type(result.data)}"}
             
             logger.info(f"✅ Appointment data: {data}")
             
