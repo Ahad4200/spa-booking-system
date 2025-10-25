@@ -853,7 +853,8 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                 
                 logger.info(f"Final parsed data: {json.dumps(data, indent=2, default=str)}")
                 
-                # The RPC function returns the JSON directly, not wrapped in a function name
+                # The RPC function now returns a structured type, not JSON
+                # The response will be a dict with the booking_result fields
                 booking_result = data
                 
                 if booking_result.get('status') == 'success':
@@ -1008,7 +1009,8 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
                 
                 logger.info(f"Final parsed data: {json.dumps(data, indent=2, default=str)}")
                 
-                # The RPC function returns the JSON directly, not wrapped in a function name
+                # The RPC function now returns a structured type, not JSON
+                # The response will be a dict with the delete_result fields
                 delete_result = data
                 
                 if delete_result.get('status') == 'success':
