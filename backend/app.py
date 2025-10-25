@@ -810,21 +810,51 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
             }).execute()
             
             logger.info(f"Booking RPC raw result: {result}")
+            logger.info(f"Result data type: {type(result.data)}")
+            logger.info(f"Result data content: {result.data}")
             
-            # FIXED: Handle response structure
+            # COMPREHENSIVE DEBUGGING AND JSONB HANDLING
             if result.data is not None:
-                # Handle list or dict response
-                if isinstance(result.data, list) and len(result.data) > 0:
-                    data = result.data[0]
+                # Handle different response formats
+                if isinstance(result.data, str):
+                    # If it's a string (JSONB as text), parse it as JSON
+                    try:
+                        data = json.loads(result.data)
+                        logger.info(f"Parsed JSON string: {data}")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse JSON string: {e}")
+                        data = {"status": "error", "message": "Invalid JSON response"}
+                
+                elif isinstance(result.data, list) and len(result.data) > 0:
+                    # RPC functions return arrays, extract first element
+                    first_item = result.data[0]
+                    logger.info(f"First item type: {type(first_item)}")
+                    logger.info(f"First item content: {first_item}")
+                    
+                    # If first element is a string (JSONB as text), parse it
+                    if isinstance(first_item, str):
+                        try:
+                            data = json.loads(first_item)
+                            logger.info(f"Parsed JSON from string: {data}")
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to parse JSON from string: {e}")
+                            data = first_item
+                    else:
+                        data = first_item
+                
                 elif isinstance(result.data, dict):
                     data = result.data
+                    logger.info(f"Direct dict response: {data}")
+                
                 else:
-                    data = {'result': result.data}
+                    # Unexpected format
+                    logger.error(f"Unexpected response format: {type(result.data)}")
+                    data = {"status": "error", "message": f"Unexpected response type: {type(result.data)}"}
                 
-                logger.info(f"Parsed booking data: {data}")
+                logger.info(f"Final parsed data: {json.dumps(data, indent=2, default=str)}")
                 
-                # Extract the actual result from the RPC function response
-                booking_result = data.get('book_spa_slot', {})
+                # The RPC function returns the JSON directly, not wrapped in a function name
+                booking_result = data
                 
                 if booking_result.get('status') == 'success':
                     # Link booking to call session
@@ -935,20 +965,51 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
             }).execute()
             
             logger.info(f"Delete RPC raw result: {result}")
+            logger.info(f"Result data type: {type(result.data)}")
+            logger.info(f"Result data content: {result.data}")
             
-            # FIXED: Handle response structure
+            # COMPREHENSIVE DEBUGGING AND JSONB HANDLING
             if result.data is not None:
-                if isinstance(result.data, list) and len(result.data) > 0:
-                    data = result.data[0]
+                # Handle different response formats
+                if isinstance(result.data, str):
+                    # If it's a string (JSONB as text), parse it as JSON
+                    try:
+                        data = json.loads(result.data)
+                        logger.info(f"Parsed JSON string: {data}")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse JSON string: {e}")
+                        data = {"status": "error", "message": "Invalid JSON response"}
+                
+                elif isinstance(result.data, list) and len(result.data) > 0:
+                    # RPC functions return arrays, extract first element
+                    first_item = result.data[0]
+                    logger.info(f"First item type: {type(first_item)}")
+                    logger.info(f"First item content: {first_item}")
+                    
+                    # If first element is a string (JSONB as text), parse it
+                    if isinstance(first_item, str):
+                        try:
+                            data = json.loads(first_item)
+                            logger.info(f"Parsed JSON from string: {data}")
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to parse JSON from string: {e}")
+                            data = first_item
+                    else:
+                        data = first_item
+                
                 elif isinstance(result.data, dict):
                     data = result.data
+                    logger.info(f"Direct dict response: {data}")
+                
                 else:
-                    data = {'result': result.data}
+                    # Unexpected format
+                    logger.error(f"Unexpected response format: {type(result.data)}")
+                    data = {"status": "error", "message": f"Unexpected response type: {type(result.data)}"}
                 
-                logger.info(f"Parsed delete data: {data}")
+                logger.info(f"Final parsed data: {json.dumps(data, indent=2, default=str)}")
                 
-                # Extract the actual result from the RPC function response
-                delete_result = data.get('delete_appointment', {})
+                # The RPC function returns the JSON directly, not wrapped in a function name
+                delete_result = data
                 
                 if delete_result.get('status') == 'success':
                     return {
