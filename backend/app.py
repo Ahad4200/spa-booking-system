@@ -809,13 +809,13 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
             if result.data is None:
                 return {"success": False, "message": "No data returned from booking"}
             
-            # Extract from array
-            if isinstance(result.data, list) and len(result.data) > 0:
-                data = result.data[0]
-            elif isinstance(result.data, dict):
+            # Extract from response - now it's a dict directly
+            if isinstance(result.data, dict):
                 data = result.data
+            elif isinstance(result.data, list) and len(result.data) > 0:
+                data = result.data[0]
             else:
-                return {"success": False, "message": f"Unexpected response type"}
+                return {"success": False, "message": f"Unexpected response type: {type(result.data)}"}
             
             logger.info(f"✅ Booking data: {data}")
             
@@ -920,13 +920,13 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
             if result.data is None:
                 return {"success": False, "message": "No data returned"}
             
-            # Extract from array
-            if isinstance(result.data, list) and len(result.data) > 0:
-                data = result.data[0]
-            elif isinstance(result.data, dict):
+            # Extract from response - now it's a dict directly
+            if isinstance(result.data, dict):
                 data = result.data
+            elif isinstance(result.data, list) and len(result.data) > 0:
+                data = result.data[0]
             else:
-                return {"success": False, "message": f"Unexpected response type"}
+                return {"success": False, "message": f"Unexpected response type: {type(result.data)}"}
             
             logger.info(f"✅ Delete data: {data}")
             
