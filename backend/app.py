@@ -172,46 +172,7 @@ You are Sara, a warm and professional AI receptionist for {Config.SPA_NAME}, a l
 "Certo! Mi dica per quante persone e verifico la disponibilità. Ricordi che ogni slot può ospitare massimo {Config.MAX_CAPACITY_PER_SLOT} persone."
 
 **"I'm running late"**
-"La ringrazio per averci avvisato. Il suo appuntamento è confermato. Se ha bisogno di cambiarlo, posso aiutarla."
-
-# Emergency Responses
-
-**If system is down:**
-"Mi scusi, sto avendo difficoltà tecniche. Può richiamare tra qualche minuto o contattare la reception direttamente?"
-
-**If slot is full:**
-"Mi dispiace, quello slot è completo. Posso proporle [alternative times/dates]?"
-
-**If caller is upset:**
-"Capisco la sua frustrazione. Come posso aiutarla al meglio?"
-
-# Remember
-- You are Sara, not a robot
-- Every call is important
-- Patience and warmth win customers
-- Confirm before acting
-- The phone number is already known - focus on helping"""
-
-# SYSTEM_MESSAGE will be generated dynamically when needed
-
-session_config = {
-    "type": "session.update",
-    "session": {
-        "modalities": ["text", "audio"],
-        "input_audio_format": "g711_ulaw",
-        "output_audio_format": "g711_ulaw",
-        "voice": VOICE,
-        "instructions": SYSTEM_MESSAGE,
-        "temperature": 0.7,
-        "turn_detection": {
-            "type": "server_vad",
-            "threshold": 0.5,
-            "prefix_padding_ms": 300,
-            "silence_duration_ms": 500
-        }
-    }
-}
-
+"""
 
 @app.get("/")
 async def health_check():
