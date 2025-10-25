@@ -275,13 +275,11 @@ async def media_stream_handler(websocket: WebSocket):
         ) as openai_ws:
             logger.info("✅ Connected to OpenAI Realtime API")
             
-            # Initialize OpenAI session immediately
-            # Generate session config dynamically (phone will be extracted from Twilio events)
-            session_config = {
+            # Phase 1: Basic session config (NO customer-specific info yet)
+            initial_session_config = {
                 "type": "session.update",
                 "session": {
                     "modalities": ["text", "audio"],
-                    "instructions": get_system_message("+1234567890"),  # Placeholder, will be updated with real phone
                     "voice": VOICE,
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
@@ -291,11 +289,12 @@ async def media_stream_handler(websocket: WebSocket):
                         "prefix_padding_ms": 300,
                         "silence_duration_ms": 500
                     },
-                    "temperature": 0.7
+                    "temperature": 0.7,
+                    "instructions": "You are a helpful spa booking assistant. Please wait while I get your information."
                 }
             }
-            await openai_ws.send(json.dumps(session_config))
-            logger.info("✅ OpenAI session configured")
+            await openai_ws.send(json.dumps(initial_session_config))
+            logger.info("✅ OpenAI session initialized (basic config)")
             
             stream_sid = None
             customer_phone = None
@@ -333,16 +332,27 @@ async def media_stream_handler(websocket: WebSocket):
                                 logger.info(f"📞 Customer phone: {customer_phone}, CallSid: {call_sid}")
                                 logger.info(f"🔍 DEBUG: Extracted customer_phone = '{customer_phone}' (type: {type(customer_phone)})")
                                 
-                                # Update OpenAI session with real customer phone number
-                                updated_session_config = {
+                                # Phase 2: Update session with REAL customer phone number
+                                customer_session_config = {
                                     "type": "session.update",
                                     "session": {
+                                        "modalities": ["text", "audio"],
+                                        "voice": VOICE,
+                                        "input_audio_format": "g711_ulaw",
+                                        "output_audio_format": "g711_ulaw",
+                                        "turn_detection": {
+                                            "type": "server_vad",
+                                            "threshold": 0.5,
+                                            "prefix_padding_ms": 300,
+                                            "silence_duration_ms": 500
+                                        },
+                                        "temperature": 0.7,
                                         "instructions": get_system_message(customer_phone)
                                     }
                                 }
-                                await openai_ws.send(json.dumps(updated_session_config))
+                                await openai_ws.send(json.dumps(customer_session_config))
                                 logger.info(f"✅ Updated OpenAI session with customer phone: {customer_phone}")
-                                logger.info(f"🔍 DEBUG: Session update = {json.dumps(updated_session_config, indent=2)}")
+                                logger.info(f"🔍 DEBUG: Customer session config = {json.dumps(customer_session_config, indent=2)}")
                                 continue
                             
                             # Handle media events (audio packets)
