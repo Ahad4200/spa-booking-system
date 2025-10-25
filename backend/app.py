@@ -809,8 +809,16 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
             if result.data is None:
                 return {"success": False, "message": "No data returned from booking"}
             
-            # Extract from response - now it's a dict directly
-            if isinstance(result.data, dict):
+            # Extract from response - handle TEXT return type
+            if isinstance(result.data, str):
+                # TEXT return type - parse as JSON
+                try:
+                    data = json.loads(result.data)
+                    logger.info(f"✅ Parsed JSON from string: {data}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse JSON string: {e}")
+                    return {"success": False, "message": "Failed to parse response"}
+            elif isinstance(result.data, dict):
                 data = result.data
             elif isinstance(result.data, list) and len(result.data) > 0:
                 data = result.data[0]
@@ -920,8 +928,16 @@ async def execute_function(function_name: str, arguments: dict, customer_phone: 
             if result.data is None:
                 return {"success": False, "message": "No data returned"}
             
-            # Extract from response - now it's a dict directly
-            if isinstance(result.data, dict):
+            # Extract from response - handle TEXT return type
+            if isinstance(result.data, str):
+                # TEXT return type - parse as JSON
+                try:
+                    data = json.loads(result.data)
+                    logger.info(f"✅ Parsed JSON from string: {data}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse JSON string: {e}")
+                    return {"success": False, "message": "Failed to parse response"}
+            elif isinstance(result.data, dict):
                 data = result.data
             elif isinstance(result.data, list) and len(result.data) > 0:
                 data = result.data[0]
