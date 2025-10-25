@@ -135,7 +135,7 @@ CREATE OR REPLACE FUNCTION public.book_spa_slot(
     p_slot_start_time TIME,
     p_slot_end_time TIME
 )
-RETURNS JSONB
+RETURNS JSON -- ← Changed from JSONB to JSON
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
